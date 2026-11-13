@@ -46,7 +46,8 @@ Passwords, messages and keys live in pages of their own, locked against swap or 
 
 ## Limits
 
-- Baseline JPEG only for now. Progressive files and files with data after the image (extra images, depth maps) are refused, and so are photos above about 65 megapixels.
+- Baseline JPEG only for now. Progressive files and files with data after the image (extra images, depth maps) are refused.
+- Large photos work at any size. A job needs about 0.6 GB of memory for a 12-megapixel photo and 2.5 GB for 48 megapixels; the program shows the figure for each photo and warns when the device has less free memory.
 - Keep the written files byte for byte. Recompression, resizing, editing and most messengers destroy the records.
 - Statistical undetectability is not established yet. The recommended room uses 0.05 bits per non-zero coefficient until the measurements set it.
 

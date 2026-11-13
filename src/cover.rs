@@ -23,9 +23,12 @@ pub const RECOMMENDED_BPNZAC: f64 = 0.05;
 /// one site in nine bits at low rates, and about half of the changed sites can move both ways.
 pub(crate) const HIDDEN_SHARE: f64 = 0.05;
 const CONTEXT_LABEL: &[u8] = b"stego-core 1 photo";
-/// Most luminance AC coefficients of a photo (about 65 megapixels): every rule keeps per-site
-/// buffers of some 30 bytes, which must stay within a browser's 4 GiB (CORE-50).
-const AC_MAX: usize = 64_000_000;
+/// Working bytes a job keeps per site at its peak (costs, order, coder layers), measured on 12 and
+/// 48 megapixel photos with some room to spare.
+const BYTES_PER_SITE: u64 = 64;
+/// Working bytes per luminance coefficient: the decoded plane, its copy for the cost model and
+/// the written plane.
+const BYTES_PER_COEFFICIENT: u64 = 8;
 /// The luminance table of T.81 table K.1 (natural order), the base of the quality estimate.
 const STANDARD_LUMA: [u16; COEFFICIENTS] = [
     16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
@@ -70,6 +73,11 @@ pub struct Capacity {
     /// In the decoy mode, the expected room for the secret behind a decoy of the recommended
     /// size; the actual room is known only after writing.
     pub hidden_bytes: Option<usize>,
+    /// About how much memory hiding in this photo or reading it takes at the default work
+    /// factor, in bytes; add the memory of a higher work factor. Photos of a set are written one
+    /// after another, so a set needs its largest photo's figure. A host warns when the device
+    /// has less free memory; nothing refuses a large photo.
+    pub memory_bytes: u64,
 }
 
 /// An admitted baseline JPEG photo.
@@ -84,14 +92,10 @@ impl Cover {
     /// # Errors
     ///
     /// [`StegoError::Jpeg`], [`StegoError::JpegProfile`], [`StegoError::TrailingData`],
-    /// [`StegoError::NotReproducible`] or [`StegoError::ImageLarge`] for a photo this crate
-    /// cannot use.
+    /// [`StegoError::NotReproducible`] for a photo this crate cannot use;
+    /// [`StegoError::Memory`] when the system does not give the memory to decode it.
     pub fn new(bytes: Vec<u8>) -> Result<Self, StegoError> {
         let jpeg = Jpeg::read(bytes)?;
-        let (wide, high) = jpeg.frame().full_blocks();
-        if wide * high * (COEFFICIENTS - 1) > AC_MAX {
-            return Err(StegoError::ImageLarge);
-        }
         let context = context(&jpeg)?;
         Ok(Self { jpeg, context })
     }
@@ -140,7 +144,16 @@ impl Cover {
             max_bytes: text_bytes(max_bits),
             recommended_bytes: text_bytes(recommended_bits),
             hidden_bytes,
+            memory_bytes: self.memory_bytes(n),
         }
+    }
+
+    /// The memory estimate of [`Capacity::memory_bytes`] for `sites` sites.
+    fn memory_bytes(&self, sites: usize) -> u64 {
+        let coefficients = self.jpeg.luma().len() as u64;
+        let file = self.jpeg.bytes().len() as u64;
+        let stretch = u64::from(crate::WorkFactor::default().memory_kib()) * 1024;
+        sites as u64 * BYTES_PER_SITE + coefficients * BYTES_PER_COEFFICIENT + 3 * file + stretch
     }
 
     pub(crate) const fn jpeg(&self) -> &Jpeg {

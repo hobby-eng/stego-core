@@ -5,7 +5,7 @@ What is planned, in rough order. Done items move to the [changelog](../CHANGELOG
 ## Before any release
 
 - **Startup self-test.** Known answers of every part (Argon2id, XChaCha20-Poly1305, HKDF, SHA-256, Reed–Solomon, Shamir, the JPEG codec, the coders, each cost model) run before a host opens its controls; a failure keeps them closed. A slower full self-test runs on request.
-- **Large photos.** No megapixel limit: a host warns when a job needs more memory than the device has. Cut the memory per site (the trellis keeps its whole path today: about 128 bytes per site) and the reading time (every rule and size is tried with a full pass).
+- **Large photos, faster.** Done: no size limit, a memory estimate per photo, reading in one pass per rule, the trellis path in checkpoints (12 MP: 0.63 GB, 48 MP: 2.5 GB). Left: the trellis takes about 90 s for 12 MP because every site passes through 1,024 states twice; a vectorized step and fewer per-site buffers (32-bit positions, freeing each layer's arrays early) would cut time and memory again.
 - **Our own Reed–Solomon codec (ShardCode).** Safe scalar Rust, no dependencies, GF(2^8) and GF(2^16), parity compatible with the current format, and:
   - an optional checksum per piece, so a damaged piece is dropped and a working set is found among the rest;
   - recreating one lost piece from any k others;

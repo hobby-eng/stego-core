@@ -3,7 +3,9 @@
 //! Nothing in a photo says which layer or size holds a record, so the reader tries them all;
 //! only the right password, layer, rule and size pass the record's tag.
 
-use crate::coding::{HIDDEN_CAP, Lane, hidden_syndrome, read_binary, read_ternary, syndrome_bits};
+use crate::coding::{
+    BinaryReader, HIDDEN_CAP, Lane, TernaryReader, hidden_syndrome, syndrome_bits,
+};
 use crate::content::Content;
 use crate::cover::{Cover, MAX_BITS_PER_SITE};
 use crate::keys::Keys;
@@ -141,8 +143,9 @@ fn standard(cover: &Cover, keys: &Keys) -> Result<Option<Found>, StegoError> {
         let lane_keys = keys.layer(Layer::Standard, rule.id())?;
         let order = lane_keys.order(sites.positions.len())?;
         let lane = Lane::new(&sites, luma, &order);
+        let reader = TernaryReader::new(&lane.values, lane_keys.coder);
         for body in feasible(sites.positions.len()) {
-            let bits = read_ternary(&lane.values, record_bits(body), lane_keys.coder);
+            let bits = reader.read(record_bits(body));
             let aad = associated(cover.context(), Layer::Standard.id(), rule.id(), body);
             if let Some(plain) = open(&from_bits(&bits), lane_keys.cipher(), &aad) {
                 return Ok(Some(Found {
@@ -164,8 +167,9 @@ fn decoy(cover: &Cover, keys: &Keys) -> Result<Option<Found>, StegoError> {
     let lane_keys = keys.layer(Layer::Decoy, rule.id())?;
     let order = lane_keys.order(sites.positions.len())?;
     let lane = Lane::new(&sites, luma, &order);
+    let reader = BinaryReader::new(&lane.values, lane_keys.coder);
     for body in feasible(sites.positions.len()) {
-        let bits = read_binary(&lane.values, record_bits(body), lane_keys.coder);
+        let bits = reader.read(record_bits(body));
         let aad = associated(cover.context(), Layer::Decoy.id(), rule.id(), body);
         if let Some(plain) = open(&from_bits(&bits), lane_keys.cipher(), &aad) {
             return Ok(Some(Found {

@@ -39,12 +39,22 @@ impl Jpeg {
         if plan.end != bytes.len() {
             return Err(StegoError::TrailingData);
         }
-        let mut planes: Vec<Vec<i16>> = plan
-            .frame
-            .components
-            .iter()
-            .map(|c| vec![0; c.stride * c.padded_rows * COEFFICIENTS])
-            .collect();
+        // No size limit: a photo of any size is decoded when the system gives the memory, and a
+        // refusal is an error, never an abort.
+        let mut planes: Vec<Vec<i16>> = Vec::with_capacity(plan.frame.components.len());
+        for c in &plan.frame.components {
+            let length = c
+                .stride
+                .checked_mul(c.padded_rows)
+                .and_then(|blocks| blocks.checked_mul(COEFFICIENTS))
+                .ok_or(StegoError::Memory)?;
+            let mut plane = Vec::new();
+            plane
+                .try_reserve_exact(length)
+                .map_err(|_| StegoError::Memory)?;
+            plane.resize(length, 0);
+            planes.push(plane);
+        }
         for scan in &plan.scans {
             decode_scan(&bytes, &plan.frame, scan, &mut planes)?;
         }

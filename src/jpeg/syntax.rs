@@ -16,8 +16,6 @@ pub(crate) const ZIGZAG: [usize; COEFFICIENTS] = [
 ];
 /// Table slots of each kind (T.81 B.2.4).
 pub(crate) const TABLES: usize = 4;
-/// Largest photo, in pixels: a 200-megapixel camera frame.
-pub(crate) const PIXELS_MAX: usize = 200_000_000;
 const MAX_SCANS: usize = 16;
 // Bounds the parsed header before allocation, repeated DRI and DHT segments included.
 const MAX_SEGMENTS: usize = 65_536;
@@ -72,9 +70,6 @@ impl Frame {
         let count = usize::from(data[5]);
         if width == 0 || height == 0 || !matches!(count, 1 | 3) || data.len() != 6 + count * 3 {
             return Err(StegoError::JpegProfile);
-        }
-        if width * height > PIXELS_MAX {
-            return Err(StegoError::ImageLarge);
         }
         let mut components: Vec<Component> = Vec::with_capacity(count);
         for triple in data[6..].as_chunks::<3>().0 {

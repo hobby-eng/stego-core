@@ -4,8 +4,8 @@
 use crate::StegoError;
 use crate::algorithm::model::Costs;
 use crate::algorithm::stc::{
-    HEIGHT, SEGMENT_BITS, Ternary, binary_embed, binary_extract, columns, lsb, ternary_embed_split,
-    ternary_extract,
+    HEIGHT, SEGMENT_BITS, Ternary, binary_embed, column_prefix, columns, lsb, prefix_extract,
+    second_bit, ternary_embed_split,
 };
 use crate::algorithm::wetpaper;
 use crate::random::{Random, next_u64};
@@ -77,8 +77,35 @@ pub(crate) fn write_ternary(
     .map_err(|_| StegoError::Coding)
 }
 
-pub(crate) fn read_ternary(values: &[i32], bits: usize, seed: u64) -> Vec<u8> {
-    ternary_extract(values, [bits / 2, bits - bits / 2], seed, SEGMENT_BITS)
+/// Reads the ternary layer for any record size after one pass over the sites: the column
+/// prefixes of the second-bit layer and of the parities.
+pub(crate) struct TernaryReader {
+    seconds: Vec<u16>,
+    parities: Vec<u16>,
+}
+
+impl TernaryReader {
+    pub(crate) fn new(values: &[i32], seed: u64) -> Self {
+        let n = values.len();
+        let seconds: Vec<u8> = values.iter().map(|&v| second_bit(v)).collect();
+        let parities: Vec<u8> = values.iter().map(|&v| lsb(v)).collect();
+        Self {
+            seconds: column_prefix(&seconds, &columns(n, HEIGHT, seed ^ 2), HEIGHT),
+            parities: column_prefix(&parities, &columns(n, HEIGHT, seed ^ 1), HEIGHT),
+        }
+    }
+
+    /// The `bits` bits of a record: half in the second-bit layer, the rest in the parities.
+    pub(crate) fn read(&self, bits: usize) -> Vec<u8> {
+        let mut message = prefix_extract(&self.seconds, bits / 2, HEIGHT, SEGMENT_BITS);
+        message.extend(prefix_extract(
+            &self.parities,
+            bits - bits / 2,
+            HEIGHT,
+            SEGMENT_BITS,
+        ));
+        message
+    }
 }
 
 /// The binary decoy before the directions of its two-way changes are chosen.
@@ -137,15 +164,22 @@ pub(crate) fn write_binary(
     Ok(BinaryWrite { stego, free })
 }
 
-pub(crate) fn read_binary(values: &[i32], bits: usize, seed: u64) -> Vec<u8> {
-    let parities: Vec<u8> = values.iter().map(|&v| lsb(v)).collect();
-    binary_extract(
-        &parities,
-        bits,
-        &columns(parities.len(), HEIGHT, seed),
-        HEIGHT,
-        SEGMENT_BITS,
-    )
+/// Reads the binary layer for any record size after one pass over the sites.
+pub(crate) struct BinaryReader {
+    parities: Vec<u16>,
+}
+
+impl BinaryReader {
+    pub(crate) fn new(values: &[i32], seed: u64) -> Self {
+        let parities: Vec<u8> = values.iter().map(|&v| lsb(v)).collect();
+        Self {
+            parities: column_prefix(&parities, &columns(values.len(), HEIGHT, seed), HEIGHT),
+        }
+    }
+
+    pub(crate) fn read(&self, bits: usize) -> Vec<u8> {
+        prefix_extract(&self.parities, bits, HEIGHT, SEGMENT_BITS)
+    }
 }
 
 /// Gives every free change a coin-chosen direction: the decoy mode without a secret behind it.

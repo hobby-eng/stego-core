@@ -14,7 +14,7 @@ pub enum StegoError {
     TrailingData,
     /// Re-encoding the unchanged photo does not give back its bytes, so a change would show.
     NotReproducible,
-    /// The photo is larger than the limits of [`crate::Limits`].
+    /// The photo has more sites than one record can address (over 4 billion).
     ImageLarge,
     /// The photo has too few usable coefficients for any record.
     ImageSmall,
@@ -76,7 +76,7 @@ impl fmt::Display for StegoError {
             Self::NotReproducible => {
                 "this photo was written in a way the program cannot reproduce exactly; choose another photo"
             }
-            Self::ImageLarge => "the photo is larger than the allowed size",
+            Self::ImageLarge => "the photo has more coefficients than a record can address",
             Self::ImageSmall => "the photo is too small to hold a message",
             Self::PasswordShort => "the password is too short (at least 12 bytes)",
             Self::PasswordLong => "the password is too long (at most 1,024 bytes)",
@@ -97,7 +97,7 @@ impl fmt::Display for StegoError {
             }
             Self::Random => "the system's random source failed",
             Self::Crypto => "a key derivation or cipher step failed",
-            Self::Memory => "the system refused the memory the password stretch needs",
+            Self::Memory => "the system did not give the memory this photo or password needs",
             Self::Pim => "the PIM must be from 0 to 1023",
             Self::MemoryLevel => "the memory level must be from 0 to 29",
             Self::Costs(e) => return write!(f, "the cost model refused the photo: {e}"),

@@ -77,7 +77,8 @@ pub fn binary_embed(
     if m > n {
         return Err(StcError::Capacity);
     }
-    let mut stego = cover.to_vec();
+    // Each segment is a trellis of its own: the bits it carries and the columns they own.
+    let mut jobs = Vec::new();
     let mut first = 0;
     for bits in message.chunks(segment) {
         let start = if first == 0 {
@@ -89,21 +90,116 @@ pub fn binary_embed(
             .map(|k| bit_end(k, n, m) - start)
             .collect();
         let span = start..start + ends.last().copied().unwrap_or(0);
-        let chosen = viterbi(
+        jobs.push((span, bits, ends));
+        first += bits.len();
+    }
+    let solve = |(span, bits, ends): &(std::ops::Range<usize>, &[u8], Vec<usize>)| {
+        viterbi(
             &cover[span.clone()],
             &costs[span.clone()],
             bits,
-            &ends,
+            ends,
             &columns[span.clone()],
             height,
-        )?;
-        stego[span].copy_from_slice(&chosen);
-        first += bits.len();
+        )
+    };
+    let chosen = run_segments(&jobs, &solve)?;
+    let mut stego = cover.to_vec();
+    for ((span, _, _), part) in jobs.iter().zip(chosen) {
+        stego[span.clone()].copy_from_slice(&part);
     }
     Ok(stego)
 }
 
+/// Solves the segments, on every core where the platform has threads. Each result depends only
+/// on its own segment, so the order of work never changes the output.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_segments<J: Sync>(
+    jobs: &[J],
+    solve: &(dyn Fn(&J) -> Result<Vec<u8>, StcError> + Sync),
+) -> Result<Vec<Vec<u8>>, StcError> {
+    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    if threads < 2 || jobs.len() < 2 {
+        return jobs.iter().map(solve).collect();
+    }
+    let per = jobs.len().div_ceil(threads);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .chunks(per)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(solve).collect::<Vec<_>>()))
+            .collect();
+        let mut out = Vec::with_capacity(jobs.len());
+        for handle in handles {
+            // A panic in a worker is a defect of this module; it is passed on unchanged.
+            let results = handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            for result in results {
+                out.push(result?);
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// Solves the segments one after another: a browser module has no threads.
+#[cfg(target_arch = "wasm32")]
+fn run_segments<J: Sync>(
+    jobs: &[J],
+    solve: &(dyn Fn(&J) -> Result<Vec<u8>, StcError> + Sync),
+) -> Result<Vec<Vec<u8>>, StcError> {
+    jobs.iter().map(solve).collect()
+}
+
+/// Columns between two stored cost vectors of the trellis.
+const CHECKPOINT: usize = 4096;
+
+/// One column of the trellis: every state's cheapest way in, with or without this column, and
+/// which one won when `decisions` is given.
+fn step(
+    cost: &mut Vec<f64>,
+    next: &mut Vec<f64>,
+    (x, rho, column): (u8, f64, u32),
+    decisions: Option<&mut [u64]>,
+) {
+    let states = cost.len();
+    let column = column as usize & (states - 1);
+    // y = 0 keeps the state, y = 1 adds the column; either pays rho when it differs from x.
+    let (pay_zero, pay_one) = if x & 1 == 1 { (rho, 0.0) } else { (0.0, rho) };
+    let mut decisions = decisions;
+    for (index, chunk) in next.chunks_mut(64).enumerate() {
+        let mut packed = 0_u64;
+        for (offset, slot) in chunk.iter_mut().enumerate() {
+            let t = index * 64 + offset;
+            let zero = cost[t] + pay_zero;
+            let one = cost[t ^ column] + pay_one;
+            let take = one < zero;
+            *slot = if take { one } else { zero };
+            packed |= u64::from(take) << offset;
+        }
+        if let Some(words) = decisions.as_deref_mut() {
+            words[index] = packed;
+        }
+    }
+    std::mem::swap(cost, next);
+}
+
+/// The end of message bit `bit`: only the states whose low bit is that bit go on, shifted.
+fn shift(cost: &mut Vec<f64>, next: &mut Vec<f64>, bit: u8) {
+    let states = cost.len();
+    let parity = usize::from(bit & 1);
+    for t in 0..states / 2 {
+        next[t] = cost[(t << 1) | parity];
+    }
+    next[states / 2..].fill(f64::INFINITY);
+    std::mem::swap(cost, next);
+}
+
 /// Minimum-cost parities for one segment; `ends[k]` is one past the last column of bit `k`.
+///
+/// The forward pass keeps the cost vector every [`CHECKPOINT`] columns instead of every column's
+/// decisions; the way back recomputes one block of decisions at a time from its checkpoint, with
+/// the same arithmetic, so it finds the same path in about two bytes per column.
 fn viterbi(
     cover: &[u8],
     costs: &[f64],
@@ -114,36 +210,19 @@ fn viterbi(
 ) -> Result<Vec<u8>, StcError> {
     let states = 1_usize << height;
     let words = states.div_ceil(64);
-    let mut path = vec![0_u64; cover.len() * words];
+    let len = cover.len();
     let mut cost = vec![f64::INFINITY; states];
     cost[0] = 0.0;
     let mut next = vec![f64::INFINITY; states];
+    let mut checkpoints: Vec<(Vec<f64>, usize)> = Vec::with_capacity(len.div_ceil(CHECKPOINT));
     let mut bit = 0;
-    for (j, ((&x, &rho), &column)) in cover.iter().zip(costs).zip(columns).enumerate() {
-        let column = column as usize & (states - 1);
-        // y = 0 keeps the state, y = 1 adds the column; either pays rho when it differs from x.
-        let (pay_zero, pay_one) = if x & 1 == 1 { (rho, 0.0) } else { (0.0, rho) };
-        let decisions = &mut path[j * words..][..words];
-        for (index, (word, chunk)) in decisions.iter_mut().zip(next.chunks_mut(64)).enumerate() {
-            let mut packed = 0_u64;
-            for (offset, slot) in chunk.iter_mut().enumerate() {
-                let t = index * 64 + offset;
-                let zero = cost[t] + pay_zero;
-                let one = cost[t ^ column] + pay_one;
-                let take = one < zero;
-                *slot = if take { one } else { zero };
-                packed |= u64::from(take) << offset;
-            }
-            *word = packed;
+    for j in 0..len {
+        if j % CHECKPOINT == 0 {
+            checkpoints.push((cost.clone(), bit));
         }
-        std::mem::swap(&mut cost, &mut next);
-        if j + 1 == ends[bit] {
-            let parity = usize::from(bits[bit] & 1);
-            for t in 0..states / 2 {
-                next[t] = cost[(t << 1) | parity];
-            }
-            next[states / 2..].fill(f64::INFINITY);
-            std::mem::swap(&mut cost, &mut next);
+        step(&mut cost, &mut next, (cover[j], costs[j], columns[j]), None);
+        if bit < ends.len() && j + 1 == ends[bit] {
+            shift(&mut cost, &mut next, bits[bit]);
             bit += 1;
         }
     }
@@ -155,18 +234,37 @@ fn viterbi(
     if !best.is_finite() {
         return Err(StcError::Infeasible);
     }
-    // `path` stores whether y = 1 was chosen on the best way into each state.
-    let mut out = vec![0_u8; cover.len()];
-    let mut bit = bits.len();
-    for j in (0..cover.len()).rev() {
-        if bit > 0 && j + 1 == ends[bit - 1] {
-            bit -= 1;
-            state = (state << 1) | usize::from(bits[bit] & 1);
+    let mut out = vec![0_u8; len];
+    let mut decisions = vec![0_u64; CHECKPOINT * words];
+    let mut back = bits.len();
+    for (block, (saved, saved_bit)) in checkpoints.iter().enumerate().rev() {
+        let start = block * CHECKPOINT;
+        let end = (start + CHECKPOINT).min(len);
+        let (mut c, mut b) = (saved.clone(), *saved_bit);
+        for j in start..end {
+            let row = &mut decisions[(j - start) * words..][..words];
+            step(
+                &mut c,
+                &mut next,
+                (cover[j], costs[j], columns[j]),
+                Some(row),
+            );
+            if b < ends.len() && j + 1 == ends[b] {
+                shift(&mut c, &mut next, bits[b]);
+                b += 1;
+            }
         }
-        let took = (path[j * words + state / 64] >> (state % 64)) & 1 == 1;
-        out[j] = u8::from(took);
-        if took {
-            state ^= columns[j] as usize & (states - 1);
+        // `decisions` stores whether y = 1 was chosen on the best way into each state.
+        for j in (start..end).rev() {
+            if back > 0 && j + 1 == ends[back - 1] {
+                back -= 1;
+                state = (state << 1) | usize::from(bits[back] & 1);
+            }
+            let took = (decisions[(j - start) * words + state / 64] >> (state % 64)) & 1 == 1;
+            out[j] = u8::from(took);
+            if took {
+                state ^= columns[j] as usize & (states - 1);
+            }
         }
     }
     Ok(out)
@@ -203,6 +301,61 @@ pub fn binary_extract(
     message
 }
 
+/// XOR prefixes of the columns of the odd elements: `prefix[j]` is the XOR of
+/// `columns[i] & mask` over every `i < j` whose `bits[i]` is odd. One pass serves every message
+/// length that [`prefix_extract`] then reads.
+#[must_use]
+pub fn column_prefix(bits: &[u8], columns: &[u32], height: usize) -> Vec<u16> {
+    // Heights stop at 16, so a masked column fits `u16`.
+    let mask = ((1_u32 << height) - 1) as u16;
+    let mut prefix = Vec::with_capacity(bits.len() + 1);
+    let mut state = 0_u16;
+    prefix.push(state);
+    for (&bit, &column) in bits.iter().zip(columns) {
+        if bit & 1 == 1 {
+            state ^= column as u16 & mask;
+        }
+        prefix.push(state);
+    }
+    prefix
+}
+
+/// [`binary_extract`] from the XOR prefixes of [`column_prefix`]: bit `k` is the XOR, over the
+/// `height` bits before it in its segment, of bit `k − k'` of the XOR of bit `k'`'s columns. Costs
+/// `O(length · height)` instead of a pass over every element; gives the same bits.
+#[must_use]
+pub fn prefix_extract(prefix: &[u16], length: usize, height: usize, segment: usize) -> Vec<u8> {
+    let n = prefix.len().saturating_sub(1);
+    let segment = segment.max(1);
+    let count = length.min(n);
+    if count == 0 {
+        return Vec::new();
+    }
+    // The XOR of each bit's columns, its column range found step by step: bit k ends at
+    // ⌊(k + 1) n / length⌋ = (k + 1) q + ⌊(k + 1) r / length⌋ with q, r = n / length, n mod length.
+    let (quotient, remainder) = (n / length, n % length);
+    let mut spans = Vec::with_capacity(count);
+    let (mut start, mut extra, mut carried) = (0, 0, 0);
+    for k in 0..count {
+        carried += remainder;
+        if carried >= length {
+            carried -= length;
+            extra += 1;
+        }
+        let end = (k + 1) * quotient + extra;
+        spans.push(prefix[end] ^ prefix[start]);
+        start = end;
+    }
+    (0..count)
+        .map(|k| {
+            let reach = (k % segment + 1).min(height);
+            let bit = (0..reach).fold(0_u16, |acc, d| acc ^ ((spans[k - d] >> d) & 1));
+            // A single bit.
+            bit as u8
+        })
+        .collect()
+}
+
 /// Least significant bit of a coefficient value, for negative values too.
 pub fn lsb(value: i32) -> u8 {
     value.rem_euclid(2) as u8
@@ -230,18 +383,24 @@ pub struct Ternary {
 
 /// Per-element quantities of the optimal distribution that both layers use.
 struct Element {
-    /// Direction (+1 or −1) that changes the second bit.
-    toward: i32,
     /// Cost of flipping the second bit: `ln((1 − q)/q)`, `q` its flip probability.
     second_cost: f64,
     /// Flip probability of the second bit.
     second_probability: f64,
-    /// Cost of the change that keeps the second bit and flips the LSB.
-    lsb_cost: f64,
+}
+
+/// The direction (+1 or −1) that changes the second bit of `x`.
+const fn toward(x: i32) -> i32 {
+    if x.rem_euclid(2) == 0 { -1 } else { 1 }
+}
+
+/// The cost of the change that keeps the second bit of `x` and flips its LSB.
+const fn away_cost(x: i32, plus: f64, minus: f64) -> f64 {
+    if toward(x) == 1 { minus } else { plus }
 }
 
 fn element(x: i32, plus: f64, minus: f64, lambda: f64) -> Element {
-    let toward = if x.rem_euclid(2) == 0 { -1 } else { 1 };
+    let toward = toward(x);
     let (rho_toward, rho_away) = if toward == 1 {
         (plus, minus)
     } else {
@@ -257,10 +416,8 @@ fn element(x: i32, plus: f64, minus: f64, lambda: f64) -> Element {
     };
     let second_cost = lambda * rho_toward + away.ln_1p();
     Element {
-        toward,
         second_cost,
         second_probability,
-        lsb_cost: rho_away,
     }
 }
 
@@ -306,10 +463,12 @@ pub fn ternary_embed(
         .iter()
         .map(|e| entropy2(e.second_probability))
         .sum();
+    let second_costs: Vec<f64> = elements.iter().map(|e| e.second_cost).collect();
+    drop(elements);
     let mut last = StcError::Infeasible;
     for share in SPLITS {
         let first = ((expected * share).round() as usize).min(message.len());
-        match layered(cover, costs, &elements, message, first, seed, segment) {
+        match layered(cover, costs, &second_costs, message, first, seed, segment) {
             Ok(mut result) => {
                 result.lambda = lambda;
                 return Ok(result);
@@ -346,12 +505,12 @@ pub fn ternary_embed_split(
         return Err(StcError::Input);
     }
     let lambda = solve_lambda(costs, message.len() as f64)?;
-    let elements: Vec<Element> = cover
+    let second_costs: Vec<f64> = cover
         .iter()
         .zip(costs.plus.iter().zip(&costs.minus))
-        .map(|(&x, (&p, &m))| element(x, p, m, lambda))
+        .map(|(&x, (&p, &m))| element(x, p, m, lambda).second_cost)
         .collect();
-    let mut result = layered(cover, costs, &elements, message, first, seed, segment)?;
+    let mut result = layered(cover, costs, &second_costs, message, first, seed, segment)?;
     result.lambda = lambda;
     Ok(result)
 }
@@ -360,7 +519,7 @@ pub fn ternary_embed_split(
 fn layered(
     cover: &[i32],
     costs: &Costs,
-    elements: &[Element],
+    second_costs: &[f64],
     message: &[u8],
     first: usize,
     seed: u64,
@@ -368,10 +527,9 @@ fn layered(
 ) -> Result<Ternary, StcError> {
     let n = cover.len();
     let seconds: Vec<u8> = cover.iter().map(|&x| second_bit(x)).collect();
-    let second_costs: Vec<f64> = elements.iter().map(|e| e.second_cost).collect();
     let chosen = binary_embed(
         &seconds,
-        &second_costs,
+        second_costs,
         &message[..first],
         &columns(n, HEIGHT, seed ^ 2),
         HEIGHT,
@@ -386,7 +544,7 @@ fn layered(
         lsb_costs.push(if flipped {
             f64::INFINITY
         } else {
-            elements[i].lsb_cost
+            away_cost(cover[i], costs.plus[i], costs.minus[i])
         });
     }
     let parities_out = binary_embed(
@@ -400,9 +558,9 @@ fn layered(
     let stego: Vec<i32> = (0..n)
         .map(|i| {
             if chosen[i] != seconds[i] {
-                cover[i] + elements[i].toward
+                cover[i] + toward(cover[i])
             } else if parities_out[i] != parities[i] {
-                cover[i] - elements[i].toward
+                cover[i] - toward(cover[i])
             } else {
                 cover[i]
             }
@@ -668,7 +826,7 @@ mod tests {
             assert_ne!(bits(x - 1), bits(x));
             assert_ne!(bits(x + 1), bits(x));
             assert_ne!(bits(x - 1), bits(x + 1));
-            let toward = element(x, 1.0, 1.0, 1.0).toward;
+            let toward = toward(x);
             assert_ne!(second_bit(x + toward), second_bit(x));
             assert_eq!(second_bit(x - toward), second_bit(x));
         }
@@ -773,5 +931,28 @@ mod tests {
             ternary_embed(&[0; 10], &costs, &[1; 2], 1, 0).unwrap_err(),
             StcError::Input
         );
+    }
+
+    #[test]
+    fn prefix_reading_gives_the_bits_of_a_full_pass_for_every_length() {
+        let mut rng = Rng(0x5eed);
+        for (n, height, segment) in [
+            (1, 10, 128),
+            (97, 10, 128),
+            (5000, 10, 128),
+            (4096, 7, 5),
+            (777, 16, 3),
+        ] {
+            let bits: Vec<u8> = (0..n).map(|_| (rng.next() & 1) as u8).collect();
+            let cols = columns(n, height, rng.next());
+            let prefix = column_prefix(&bits, &cols, height);
+            for length in [0, 1, 2, 3, 63, 128, 129, 300, n / 2, n, n + 5] {
+                assert_eq!(
+                    prefix_extract(&prefix, length, height, segment),
+                    binary_extract(&bits, length, &cols, height, segment),
+                    "n {n} height {height} segment {segment} length {length}"
+                );
+            }
+        }
     }
 }
