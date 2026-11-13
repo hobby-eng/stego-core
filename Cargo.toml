@@ -1,0 +1,57 @@
+[package]
+name = "stego-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+description = "Experimental JPEG steganography core: password-protected records, decoy records and selectable cost models"
+repository = "https://github.com/hobby-eng/stego-core"
+license = "MIT OR Apache-2.0"
+# Not published until the record format is frozen after the detectability measurements.
+publish = false
+
+# Exact versions (CORE-25); the reasons are in THIRD_PARTY_NOTICES.md.
+[dependencies]
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+bc-rand = "=0.5.0"
+chacha20 = { version = "=0.10.2", default-features = false, features = ["zeroize"] }
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["zeroize"] }
+hkdf = "=0.13.0"
+rand_chacha = "=0.9.0"
+rand_core = "=0.9.5"
+sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
+sskr = "=0.12.0"
+unicode-normalization = "=0.1.26"
+zeroize = { version = "=1.9.1", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+# Synthetic test photos only; no photo file is committed.
+jpeg-encoder = "=0.7.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+too_many_lines = "deny"
+mod_module_files = "deny"
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+# The cost models and the trellis are slow without optimization even in tests.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test]
+opt-level = 2
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

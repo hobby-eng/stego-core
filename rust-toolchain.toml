@@ -1,0 +1,6 @@
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+# The browser binding and the release targets of the desktop systems, for clippy.
+targets = ["wasm32-unknown-unknown", "x86_64-pc-windows-gnu", "aarch64-apple-darwin"]
+components = ["rustfmt", "clippy"]

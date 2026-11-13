@@ -1,0 +1,21 @@
+# CORE-15: at most 150 lines of code per function.
+too-many-lines-threshold = 150
+# Tests may unwrap, expect and panic (RUST-01, RUST-05); library code returns errors.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# The library never touches files, the network, the clock or threads (CORE-09): the host gives it
+# what it needs.
+disallowed-methods = [
+  { path = "std::time::Instant::now", reason = "the host owns the clock; it traps on wasm32-unknown-unknown" },
+  { path = "std::time::SystemTime::now", reason = "the host owns the clock" },
+  { path = "std::thread::spawn", reason = "the host owns threads" },
+  { path = "std::fs::read", reason = "the host reads files" },
+  { path = "std::fs::write", reason = "the host writes files" },
+]
+disallowed-types = [
+  { path = "std::fs::File", reason = "the host reads and writes files" },
+  { path = "std::net::TcpStream", reason = "no network where secrets are (RUST-10)" },
+  { path = "std::net::UdpSocket", reason = "no network where secrets are (RUST-10)" },
+]
