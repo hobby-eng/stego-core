@@ -1,11 +1,11 @@
 # stego-core
 
+> [!WARNING]
+> **Draft, not ready for production.** stego-core is an early draft: the code, the API, the defaults and the record format will still change, files written now may not open in later versions, and no independent cryptographer has reviewed it. Do not rely on it for anything you cannot afford to lose, and keep the originals.
+
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 stego-core hides a text or a file in ordinary JPEG photos, protected by a password. Only someone with the password finds the message; to everyone else the photo looks and opens as before. It is the core library of the StegoCode program and works offline: it opens no file, network connection or clock of its own.
-
-> [!WARNING]
-> **Draft, not ready for production.** stego-core is an early draft: the code, the API, the defaults and the record format will still change, files written now may not open in later versions, and no independent cryptographer has reviewed it. Do not rely on it for anything you cannot afford to lose, and keep the originals.
 
 The [documentation index](docs/README.md) lists the guides; [How it works](docs/TECHNICAL.md) explains every algorithm.
 
