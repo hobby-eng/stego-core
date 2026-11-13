@@ -297,6 +297,7 @@ fn the_room_the_core_reports_is_the_room_writing_finds() {
         .unwrap()
         .secret;
     assert!(room.fits() && room.recommended < room.maximum);
+    assert_eq!(room.limiting, Some(0));
     let exact = Content::text(&"y".repeat(room.recommended)).unwrap();
     let exact_room = stego_core::fit(&[&cover], &Settings::default(), &exact, None)
         .unwrap()

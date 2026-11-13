@@ -21,6 +21,9 @@ pub struct Room {
     pub recommended: usize,
     /// The largest message the coders can place at all.
     pub maximum: usize,
+    /// The photo, by its index among those given, whose room ends the recommended size first:
+    /// the one to replace with a larger photo when the message does not fit.
+    pub limiting: Option<usize>,
 }
 
 impl Room {
@@ -51,6 +54,9 @@ pub struct Fit {
     pub secret: Room,
     /// The decoy's room, in the decoy mode.
     pub decoy: Option<Room>,
+    /// Photos of the set that may be lost with the message still readable: n − k for any k of
+    /// n, none when every photo is needed.
+    pub may_lose: usize,
 }
 
 /// One photo's limits in bits of a record at the two rates.
@@ -98,8 +104,8 @@ pub fn fit(
         .collect();
     let room = |content: &Content, hidden: bool| {
         let fixed = CONTENT_HEADER + content.name().len();
-        let at = |rate: fn(&Limits) -> usize| {
-            let caps: Vec<usize> = limits
+        let caps_at = |rate: fn(&Limits) -> usize| -> Vec<usize> {
+            limits
                 .iter()
                 .map(|l| {
                     let bits = if hidden {
@@ -109,28 +115,35 @@ pub fn fit(
                     };
                     largest_plain(bits)
                 })
-                .collect();
-            let weights: Vec<usize> = limits.iter().map(|l| l.weight).collect();
-            largest_encoded(&caps, &weights, settings.needed).saturating_sub(fixed)
+                .collect()
         };
+        let weights: Vec<usize> = limits.iter().map(|l| l.weight).collect();
+        let recommended_caps = caps_at(|l| l.recommended);
+        let recommended = largest_encoded(&recommended_caps, &weights, settings.needed);
         Room {
             needed: content.bytes().len(),
-            recommended: at(|l| l.recommended),
-            maximum: at(|l| l.maximum),
+            recommended: recommended.saturating_sub(fixed),
+            maximum: largest_encoded(&caps_at(|l| l.maximum), &weights, settings.needed)
+                .saturating_sub(fixed),
+            limiting: limiting(&recommended_caps, &weights, settings.needed, recommended),
         }
     };
+    let may_lose = settings.needed.map_or(0, |k| covers.len() - usize::from(k));
     match (settings.mode, decoy) {
         (Mode::Standard, None) => Ok(Fit {
             secret: room(secret, false),
             decoy: None,
+            may_lose,
         }),
         (Mode::Decoy, Some(decoy)) => Ok(Fit {
             secret: room(secret, true),
             decoy: Some(room(decoy, false)),
+            may_lose,
         }),
         (Mode::Decoy, None) => Ok(Fit {
             secret: room(secret, false),
             decoy: None,
+            may_lose,
         }),
         (Mode::Standard, Some(_)) => Err(StegoError::DecoyChoice),
     }
@@ -185,6 +198,21 @@ fn largest_encoded(caps: &[usize], weights: &[usize], needed: Option<u8>) -> usi
     low
 }
 
+/// The photo whose room a message one byte longer than `length` overflows first: the smallest
+/// room in a k-of-n set, else the first photo whose slice no longer fits.
+fn limiting(caps: &[usize], weights: &[usize], needed: Option<u8>, length: usize) -> Option<usize> {
+    if needed.is_some() {
+        return caps
+            .iter()
+            .enumerate()
+            .min_by_key(|&(_, cap)| *cap)
+            .map(|(i, _)| i);
+    }
+    slice_lengths(length + 1, weights)
+        .zip(caps)
+        .position(|(slice, &cap)| PART_HEADER + slice > cap)
+}
+
 /// The slice lengths `crate::parts::spread` gives a message of `length` bytes.
 fn slice_lengths(length: usize, weights: &[usize]) -> impl Iterator<Item = usize> {
     let total: u128 = weights.iter().map(|&w| w as u128).sum::<u128>().max(1);
@@ -223,5 +251,14 @@ mod tests {
         let largest = largest_encoded(&caps, &[1, 1], Some(2));
         assert_eq!(largest, 2 * shard - threshold::TAG_BYTES);
         assert_eq!(threshold::shard_bytes(largest, 2), shard);
+    }
+
+    #[test]
+    fn the_photo_that_ends_the_room_is_named() {
+        let caps = [PART_HEADER + 1000, PART_HEADER + 100, PART_HEADER + 1000];
+        let weights = [1, 1, 1];
+        let largest = largest_encoded(&caps, &weights, None);
+        assert_eq!(limiting(&caps, &weights, None, largest), Some(1));
+        assert_eq!(limiting(&caps, &weights, Some(2), 0), Some(1));
     }
 }
