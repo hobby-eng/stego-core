@@ -34,6 +34,7 @@ mod random;
 mod record;
 mod report;
 mod reveal;
+mod self_test;
 mod shard;
 mod sites;
 mod threshold;
@@ -53,5 +54,6 @@ pub use report::{
     Digest, FileReport, HideReport, Layer, Parameters, ReadReport, RecordReport, hex, parameters,
 };
 pub use reveal::{Reading, Revealed, reveal};
+pub use self_test::{Check, SelfTest, full_self_test, startup_self_test};
 pub use sites::SiteRule;
 pub use threshold::THRESHOLD_MAX;

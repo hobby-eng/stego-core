@@ -4,17 +4,10 @@ What is planned, in rough order. Done items move to the [changelog](../CHANGELOG
 
 ## Before any release
 
-- **Startup self-test.** Known answers of every part (Argon2id, XChaCha20-Poly1305, HKDF, SHA-256, Reed–Solomon, Shamir, the JPEG codec, the coders, each cost model) run before a host opens its controls; a failure keeps them closed. A slower full self-test runs on request.
+- **Startup self-test.** Done for SHA-256, HKDF, XChaCha20-Poly1305, Argon2id, Reed–Solomon, Shamir, the trellis and the JPEG codec, with a full self-test that adds the default stretch and a whole job. Left: known answers of the cost models from an independent implementation (conseal).
 - **Large photos, faster.** Done: no size limit, a memory estimate per photo, reading in one pass per rule, the trellis path in checkpoints (12 MP: 0.63 GB, 48 MP: 2.5 GB). Left: the trellis takes about 90 s for 12 MP because every site passes through 1,024 states twice; a vectorized step and fewer per-site buffers (32-bit positions, freeing each layer's arrays early) would cut time and memory again.
-- **Our own Reed–Solomon codec (ShardCode).** Safe scalar Rust, no dependencies, GF(2^8) and GF(2^16), parity compatible with the current format, and:
-  - an optional checksum per piece, so a damaged piece is dropped and a working set is found among the rest;
-  - recreating one lost piece from any k others;
-  - adding pieces later (3 of 5 becomes 3 of 7) without touching the existing ones;
-  - an optional self-describing header (version, field, k, n, number, length, set);
-  - checking that a whole set is consistent;
-  - error correction (Berlekamp–Massey) for data where the damaged bytes are unknown: printed, scanned or recognized text.
-  - Tests: every combination of pieces for small n, comparison with independent implementations (reed-solomon-erasure, reed-solomon-engine, sia_reed_solomon), fuzzing, property tests, fixed known answers.
-- **Sets of photos, checked strictly before and after.** 2 ≤ k < n ≤ 16; the same k, nonce and length in every piece; a file added twice (same SHA-256) counts once; two different pieces claiming one number are reported as a conflict; unreadable photos are skipped and a working set is found among the rest; the room shows which photo limits it and how many may be lost.
+- **Our own Reed–Solomon codec (ShardCode).** Done in `src/shard`: GF(2^8), parity equal to reed-solomon-erasure's, any piece made again, sets that grow, consistency checks, tests against that crate and every choice of pieces. Left, for a separate ShardCode crate: GF(2^16), an optional checksum and self-describing header per piece, error correction (Berlekamp–Massey) for data with unknown damaged bytes, fuzzing.
+- **Sets of photos, checked strictly.** Done: duplicates count once and are refused for writing, conflicts are reported, k-of-n pieces must agree. Left: show which photo limits the room and how many may be lost.
 - **Shamir through vsss-rs** instead of sskr: constant-time, wiped, without the second copy of RustCrypto that sskr brings.
 - **Protection.** A strict mode that checks the protections before a password is accepted; the password normalized straight into protected memory; secrets wiped as soon as they are used; a warning when swap is unencrypted; the decrypted parts of records in protected memory.
 - **Supply chain.** `cargo vet` with the Google, Mozilla, Bytecode Alliance, ISRG and Zcash audit sets; own audits for the versions they do not cover.

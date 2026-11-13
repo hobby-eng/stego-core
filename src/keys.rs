@@ -150,8 +150,8 @@ impl Keys {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn root(&self) -> &[u8] {
+    /// The root key, for the self-test's known answer.
+    pub(crate) fn root_bytes(&self) -> &[u8] {
         self.root.as_bytes()
     }
 }
@@ -216,7 +216,7 @@ mod tests {
         let password = Password::new("public-test-password").unwrap();
         let keys = Keys::derive(&password, &[42; KEY_BYTES]).unwrap();
         assert_eq!(
-            keys.root()[..],
+            keys.root_bytes()[..],
             [
                 0xab, 0x8b, 0x46, 0xa3, 0x6a, 0x02, 0x35, 0x9e, 0xbd, 0xb2, 0xaa, 0xdc, 0xf6, 0x0c,
                 0x6d, 0xf1, 0x46, 0x41, 0xda, 0x5d, 0x69, 0xf7, 0x81, 0xdc, 0x64, 0xa6, 0x30, 0x79,

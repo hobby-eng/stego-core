@@ -25,6 +25,7 @@ The [documentation index](docs/README.md) lists the guides; [How it works](docs/
 - **Decoy mode.** A decoy message with its own password, and the real secret hidden in the directions of the decoy's changes (a wet-paper code). Whoever has only the decoy password sees the decoy and cannot tell whether a secret exists: a decoy written alone looks the same.
 - **Cost models**, which decide where a change is least visible: J-UNIWARD (image texture), J-MiPOD (a statistical model of the noise), J-CRFW (J-MiPOD plus neighbouring blocks), UERD (block energy; fast and older).
 - **Read-back check.** Before any file is returned, every new photo is read back with each password, and each message's SHA-256 must match.
+- **Self-test.** `startup_self_test` checks every part against published known answers (SHA-256, HKDF, XChaCha20-Poly1305, Argon2id, Reed–Solomon) and round trips in milliseconds; a host runs it at every start and keeps its controls closed if a check fails. `full_self_test` adds the default password stretch and a whole hiding job.
 - **Reports** with every technical detail of a job: mode, model, changes, rate, key derivation, cipher.
 
 ## Several photos
