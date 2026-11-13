@@ -15,6 +15,11 @@ const KEY_BYTES: usize = 32;
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
 const AAD_LABEL: &[u8] = b"stego-core 1 threshold";
+/// Bytes of an SSKR share of a 32-byte key: five bytes of metadata and the share value.
+const SHARE_BYTES: usize = 5 + KEY_BYTES;
+/// Bytes a threshold payload adds to the encoded message: the threshold, the share's length,
+/// the share, the nonce and the tag.
+pub(crate) const PAYLOAD_OVERHEAD: usize = 1 + 2 + SHARE_BYTES + NONCE_BYTES + TAG_BYTES;
 /// Most photos of a threshold set: SSKR's limit of members in a group.
 pub const THRESHOLD_MAX: usize = 16;
 
@@ -144,6 +149,10 @@ mod tests {
             assert_eq!(&joined[..], b"abandon ability able");
         }
         assert!(join(&[&parts[1]], &set).is_none());
+        assert_eq!(
+            parts[0].len(),
+            PAYLOAD_OVERHEAD + b"abandon ability able".len()
+        );
         assert!(join(&[&parts[0], &parts[1]], &[6; 16]).is_none());
     }
 

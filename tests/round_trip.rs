@@ -286,3 +286,43 @@ fn a_message_larger_than_the_photo_is_refused() {
     .unwrap_err();
     assert_eq!(error, StegoError::MessageLong);
 }
+
+#[test]
+fn the_room_the_core_reports_is_the_room_writing_finds() {
+    let cover = photo(640, 480, 17);
+    let key = password("correct horse battery");
+    let probe = Content::text("x").unwrap();
+    let room = stego_core::fit(&[&cover], &Settings::default(), &probe, None)
+        .unwrap()
+        .secret;
+    assert!(room.fits() && room.recommended < room.maximum);
+    let exact = Content::text(&"y".repeat(room.recommended)).unwrap();
+    let exact_room = stego_core::fit(&[&cover], &Settings::default(), &exact, None)
+        .unwrap()
+        .secret;
+    assert_eq!(exact_room.spare(), 0);
+    hide(
+        &[&cover],
+        &Settings::default(),
+        Secret {
+            content: &exact,
+            password: &key,
+        },
+        None,
+        &mut TestRandom(18),
+    )
+    .unwrap();
+    let over = Content::text(&"z".repeat(room.maximum + 1)).unwrap();
+    let error = hide(
+        &[&cover],
+        &Settings::default(),
+        Secret {
+            content: &over,
+            password: &key,
+        },
+        None,
+        &mut TestRandom(19),
+    )
+    .unwrap_err();
+    assert_eq!(error, StegoError::MessageLong);
+}
