@@ -127,6 +127,9 @@ pub(crate) enum Assembly {
     Complete(Content),
     /// Parts are missing: `found` of the `needed`.
     Incomplete { found: usize, needed: usize },
+    /// Two parts claim the same number with different contents, or the parts of a k-of-n set
+    /// do not agree with each other.
+    Conflict,
 }
 
 /// Joins the parts of one set: a set with enough parts if there is one, else the set with the
@@ -135,9 +138,17 @@ pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
     parts.sort_by(|a, b| {
         (a.set, a.scheme, a.count, a.index).cmp(&(b.set, b.scheme, b.count, b.index))
     });
+    // The same part read twice (the same photo from two folders) counts once; two different
+    // parts under one number are a conflict, never a silent choice.
+    let mut conflict = false;
     parts.dedup_by(|a, b| {
-        (a.set, a.scheme, a.count, a.index) == (b.set, b.scheme, b.count, b.index)
+        let same_place = (a.set, a.scheme, a.count, a.index) == (b.set, b.scheme, b.count, b.index);
+        conflict |= same_place && a.payload != b.payload;
+        same_place
     });
+    if conflict {
+        return Some(Assembly::Conflict);
+    }
     let same = |a: &Part, b: &Part| (a.set, a.scheme, a.count) == (b.set, b.scheme, b.count);
     let mut best: Option<(usize, usize)> = None;
     let mut start = 0;
@@ -176,7 +187,11 @@ pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
             .iter()
             .map(|p| (usize::from(p.index), p.payload.as_slice()))
             .collect();
-        threshold::join(&payloads, usize::from(count), &set)?
+        match threshold::join(&payloads, usize::from(count), &set) {
+            threshold::Joined::Message(encoded) => encoded,
+            threshold::Joined::Inconsistent => return Some(Assembly::Conflict),
+            threshold::Joined::Unreadable => return None,
+        }
     } else {
         let mut joined = Zeroizing::new(Vec::new());
         for part in &parts {

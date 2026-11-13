@@ -125,6 +125,10 @@ Four ideas are combined:
 - **Rabin's information dispersal** (1989). Using such a code, a file is split into n pieces of size 1/k each, any k of which rebuild it. It saves space but does not hide anything: k − 1 pieces still show parts of the data.
 - **Krawczyk's "secret sharing made short"** (1993) joins them. The message is encrypted once with a random key; the ciphertext is dispersed with Reed–Solomon into n pieces of about 1/k each; the key is split with Shamir. Any k photos give k pieces and k key shares, enough to rebuild and open the ciphertext. Fewer than k photos give no key, so their pieces are ciphertext only. The space is close to Rabin's; the secrecy rests on the cipher.
 
+The Reed–Solomon codec is stego-core's own: GF(2^8) with the polynomial x^8 + x^4 + x^3 + x^2 + 1, and the systematic matrix made from the Vandermonde matrix V[r][c] = r^c times the inverse of its top k rows. That is the construction of Backblaze's and klauspost's codes and of the `reed-solomon-erasure` crate, and the tests check that the pieces agree with that crate byte for byte for every shape up to 16 photos (four one-byte pieces 01 02 03 04 give the parity 45 5E). Row i depends only on i and k, so one lost piece can be made again from any k others, and a set can grow later without touching its pieces.
+
+Reading checks a set strictly: the same file given twice counts once; two different pieces under one number, or more than k pieces that do not agree with each other, are reported as a conflict instead of being chosen between; too few pieces are reported with how many were found and how many are needed. Writing refuses the same photo twice, since two records in copies of one photo would show their changes when the copies are compared.
+
 Every photo carries one piece, one key share and the set's identifier, inside its own password-encrypted record. Sets have up to 16 photos, SSKR's limit; the pieces are of equal size, so the smallest photo bounds the room.
 
 ## Room

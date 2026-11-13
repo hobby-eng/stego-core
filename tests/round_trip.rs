@@ -405,3 +405,37 @@ fn a_record_opens_only_with_the_pim_and_memory_level_it_was_written_with() {
         Reading::Nothing
     ));
 }
+
+#[test]
+fn a_photo_given_twice_is_read_once_and_refused_for_writing() {
+    let cover = photo(640, 480, 25);
+    let secret = Content::text("only once").unwrap();
+    let key = password("correct horse battery");
+    let error = hide(
+        &[&cover, &cover],
+        &Settings::default(),
+        Secret {
+            content: &secret,
+            password: &key,
+        },
+        None,
+        &mut TestRandom(26),
+    )
+    .unwrap_err();
+    assert_eq!(error, StegoError::DuplicatePhoto);
+    let other = photo(640, 480, 27);
+    let result = hide(
+        &[&cover, &other],
+        &Settings::default(),
+        Secret {
+            content: &secret,
+            password: &key,
+        },
+        None,
+        &mut TestRandom(28),
+    )
+    .unwrap();
+    // Photo 0 twice and photo 1: the copy counts once, so the set is complete.
+    let covers = reread(result.files(), &[0, 0, 1]);
+    assert_eq!(read_text(&covers, &key).as_deref(), Some("only once"));
+}

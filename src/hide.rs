@@ -73,6 +73,11 @@ pub fn hide(
     if covers.is_empty() || covers.len() > CARRIERS_MAX {
         return Err(StegoError::Carriers);
     }
+    let mut seen: Vec<&[u8; 32]> = covers.iter().map(|c| c.sha256()).collect();
+    seen.sort_unstable();
+    if seen.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(StegoError::DuplicatePhoto);
+    }
     let weights: Vec<usize> = covers
         .iter()
         .map(|c| {

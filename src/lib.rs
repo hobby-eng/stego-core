@@ -34,6 +34,7 @@ mod random;
 mod record;
 mod report;
 mod reveal;
+mod shard;
 mod sites;
 mod threshold;
 

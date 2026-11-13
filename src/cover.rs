@@ -84,6 +84,7 @@ pub struct Capacity {
 pub struct Cover {
     jpeg: Jpeg,
     context: [u8; KEY_BYTES],
+    sha256: [u8; 32],
 }
 
 impl Cover {
@@ -97,13 +98,24 @@ impl Cover {
     pub fn new(bytes: Vec<u8>) -> Result<Self, StegoError> {
         let jpeg = Jpeg::read(bytes)?;
         let context = context(&jpeg)?;
-        Ok(Self { jpeg, context })
+        let sha256 = Sha256::digest(jpeg.bytes()).into();
+        Ok(Self {
+            jpeg,
+            context,
+            sha256,
+        })
     }
 
     /// The photo's file bytes.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         self.jpeg.bytes()
+    }
+
+    /// SHA-256 of the file: the same file added twice has the same one.
+    #[must_use]
+    pub const fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
     }
 
     /// Facts for the advanced view.

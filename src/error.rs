@@ -38,6 +38,9 @@ pub enum StegoError {
     DecoyChoice,
     /// No photo, or more than [`crate::CARRIERS_MAX`] photos, were given.
     Carriers,
+    /// The same photo (the same SHA-256) was chosen twice for writing. Two records in copies of
+    /// one photo would show their changes when the copies are compared.
+    DuplicatePhoto,
     /// The threshold is below 2, above the number of photos, or the set has more than 16 photos.
     Threshold,
     /// The host's random source failed.
@@ -92,6 +95,9 @@ impl fmt::Display for StegoError {
             }
             Self::DecoyChoice => "this mode needs a decoy, or takes none",
             Self::Carriers => "choose between 1 and 256 photos",
+            Self::DuplicatePhoto => {
+                "the same photo was chosen twice; each photo can hold only one part"
+            }
             Self::Threshold => {
                 "the number of photos needed must be from 2 to the number of photos, with at most 16 photos"
             }

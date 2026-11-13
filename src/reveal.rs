@@ -30,6 +30,9 @@ pub enum Reading {
     },
     /// The whole message.
     Complete(Revealed),
+    /// Two photos carry different parts under one number, or the parts do not agree: photos of
+    /// two different sets were mixed, or one was altered.
+    Conflict,
 }
 
 /// A message that opened, with its technical report.
@@ -71,7 +74,13 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
     }
     let mut parts = Vec::new();
     let mut files = Vec::new();
+    let mut seen: Vec<&[u8; 32]> = Vec::with_capacity(covers.len());
     for (index, cover) in covers.iter().enumerate() {
+        // The same file given twice (from two folders, say) is read once.
+        if seen.contains(&cover.sha256()) {
+            continue;
+        }
+        seen.push(cover.sha256());
         let Some(found) = open_one(cover, password)? else {
             continue;
         };
@@ -98,6 +107,7 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
     Ok(match assemble(parts) {
         None => Reading::Nothing,
         Some(Assembly::Incomplete { found, needed }) => Reading::Incomplete { found, needed },
+        Some(Assembly::Conflict) => Reading::Conflict,
         Some(Assembly::Complete(content)) => {
             let report = ReadReport {
                 files,

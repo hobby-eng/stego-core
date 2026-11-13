@@ -5,12 +5,12 @@
 
 use crate::StegoError;
 use crate::random::Random;
+use crate::shard::Code;
 use bc_rand::RandomNumberGenerator;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{Tag, XChaCha20Poly1305, XNonce};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, RngCore, SeedableRng};
-use reed_solomon_erasure::galois_8::ReedSolomon;
 use sskr::{GroupSpec, Secret, Spec, sskr_combine, sskr_generate_using};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -110,23 +110,19 @@ pub(crate) fn split(
 /// The ciphertext cut into `k` data shards and `count - k` parity shards of equal size.
 fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Vec<u8>>, StegoError> {
     let size = sealed.len().div_ceil(k);
-    let mut shards: Vec<Vec<u8>> = (0..count)
+    let data: Vec<Vec<u8>> = (0..k)
         .map(|i| {
             let start = (i * size).min(sealed.len());
             let mut shard = sealed[start..(start + size).min(sealed.len())].to_vec();
             shard.resize(size, 0);
-            if i >= k {
-                shard.fill(0);
-            }
             shard
         })
         .collect();
-    if count > k {
-        ReedSolomon::new(k, count - k)
-            .and_then(|code| code.encode(&mut shards))
-            .map_err(|_| StegoError::Threshold)?;
-    }
-    Ok(shards)
+    let code = Code::new(k).map_err(|_| StegoError::Threshold)?;
+    let refs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+    (0..count)
+        .map(|i| code.piece(&refs, i).map_err(|_| StegoError::Threshold))
+        .collect()
 }
 
 /// One SSKR share of `key` per photo, any `needed` of which restore it.
@@ -181,35 +177,39 @@ fn fields(payload: &[u8]) -> Option<Fields<'_>> {
     })
 }
 
+/// What the parts of a k-of-n set give.
+pub(crate) enum Joined {
+    /// The encoded message.
+    Message(Zeroizing<Vec<u8>>),
+    /// More than k pieces were given and they do not all belong to one set.
+    Inconsistent,
+    /// The pieces do not rebuild a ciphertext that opens.
+    Unreadable,
+}
+
 /// Restores the encoded message from `(photo number, payload)` pairs of one set of `count`
-/// photos; `None` when they do not rebuild a ciphertext that opens.
-pub(crate) fn join(
-    payloads: &[(usize, &[u8])],
-    count: usize,
-    set: &[u8],
-) -> Option<Zeroizing<Vec<u8>>> {
+/// photos.
+pub(crate) fn join(payloads: &[(usize, &[u8])], count: usize, set: &[u8]) -> Joined {
+    join_checked(payloads, count, set).unwrap_or(Joined::Unreadable)
+}
+
+fn join_checked(payloads: &[(usize, &[u8])], count: usize, set: &[u8]) -> Option<Joined> {
     let k = usize::from(needed(payloads.first()?.1)?);
     let parsed: Vec<(usize, Fields<'_>)> = payloads
         .iter()
         .map(|&(i, p)| fields(p).map(|f| (i, f)))
         .collect::<Option<_>>()?;
     let first = &parsed.first()?.1;
-    let mut slots: Vec<Option<Vec<u8>>> = vec![None; count];
-    for (index, f) in &parsed {
-        *slots.get_mut(*index)? = Some(f.shard.to_vec());
+    if parsed.iter().any(|(index, _)| *index >= count) {
+        return None;
     }
-    if count > k {
-        ReedSolomon::new(k, count - k)
-            .ok()?
-            .reconstruct_data(&mut slots)
-            .ok()?;
+    let pieces: Vec<(usize, &[u8])> = parsed.iter().map(|(i, f)| (*i, f.shard)).collect();
+    let code = Code::new(k).ok()?;
+    // Every piece beyond k must agree with the others, or the set is mixed.
+    if pieces.len() > k && !code.consistent(&pieces).ok()? {
+        return Some(Joined::Inconsistent);
     }
-    let data: Vec<&[u8]> = slots
-        .iter()
-        .take(k)
-        .map(Option::as_deref)
-        .collect::<Option<_>>()?;
-    let mut sealed = data.concat();
+    let mut sealed = code.rebuild(&pieces).ok()?.concat();
     sealed.truncate(first.sealed_length);
     let body_length = sealed.len().checked_sub(TAG_BYTES)?;
     let tag = Tag::try_from(&sealed[body_length..]).ok()?;
@@ -225,7 +225,7 @@ pub(crate) fn join(
     cipher
         .decrypt_inout_detached(&nonce, &aad(set), plain.as_mut_slice().into(), &tag)
         .ok()?;
-    Some(plain)
+    Some(Joined::Message(plain))
 }
 
 fn aad(set: &[u8]) -> Vec<u8> {
@@ -252,22 +252,44 @@ mod tests {
             PAYLOAD_OVERHEAD + shard_bytes(MESSAGE.len(), 2)
         );
         for pick in [[0, 1], [0, 2], [2, 1]] {
-            let joined = join(&pairs(&parts, &pick), 3, &set).unwrap();
+            let Joined::Message(joined) = join(&pairs(&parts, &pick), 3, &set) else {
+                panic!("{pick:?} did not join");
+            };
             assert_eq!(&joined[..], MESSAGE);
         }
-        assert!(join(&pairs(&parts, &[1]), 3, &set).is_none());
-        assert!(join(&pairs(&parts, &[0, 1]), 3, &[6; 16]).is_none());
+        assert!(matches!(
+            join(&pairs(&parts, &[1]), 3, &set),
+            Joined::Unreadable
+        ));
+        assert!(matches!(
+            join(&pairs(&parts, &[0, 1]), 3, &[6; 16]),
+            Joined::Unreadable
+        ));
     }
 
     #[test]
     fn three_of_five_need_three() {
         let set = [7; 16];
         let parts = split(MESSAGE, 3, 5, &set, &mut Counter(9)).unwrap();
-        assert_eq!(
-            &join(&pairs(&parts, &[4, 1, 3]), 5, &set).unwrap()[..],
-            MESSAGE
-        );
-        assert!(join(&pairs(&parts, &[4, 1]), 5, &set).is_none());
+        let Joined::Message(joined) = join(&pairs(&parts, &[4, 1, 3]), 5, &set) else {
+            panic!("three of five did not join");
+        };
+        assert_eq!(&joined[..], MESSAGE);
+        assert!(matches!(
+            join(&pairs(&parts, &[4, 1]), 5, &set),
+            Joined::Unreadable
+        ));
+        let mut forged = parts[2].to_vec();
+        if let Some(last) = forged.last_mut() {
+            *last ^= 1;
+        }
+        let mixed = [
+            (4, parts[4].as_slice()),
+            (1, parts[1].as_slice()),
+            (3, parts[3].as_slice()),
+            (2, forged.as_slice()),
+        ];
+        assert!(matches!(join(&mixed, 5, &set), Joined::Inconsistent));
     }
 
     #[test]

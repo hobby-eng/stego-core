@@ -10,10 +10,9 @@ Runtime dependencies, pinned exactly in `Cargo.toml`:
 | hkdf, sha2               | Key separation and hashes                                           | MIT OR Apache-2.0   |
 | sskr, bc-shamir, bc-rand | Shamir sharing of the key of a k-of-n set (Blockchain Commons SSKR) | BSD-2-Clause-Patent |
 | rand_chacha, rand_core   | The SSKR generator, seeded from the host's random source            | MIT OR Apache-2.0   |
-| reed-solomon-erasure     | Shards of a k-of-n set, any k of which rebuild the ciphertext       | MIT                 |
 | unicode-normalization    | NFKD of passwords                                                   | MIT OR Apache-2.0   |
 | zeroize                  | Wiping secrets                                                      | MIT OR Apache-2.0   |
 
-Development dependency: jpeg-encoder (synthetic test photos), (MIT OR Apache-2.0) AND IJG.
+Development dependencies: jpeg-encoder (synthetic test photos), (MIT OR Apache-2.0) AND IJG; reed-solomon-erasure (an independent Reed–Solomon implementation whose parity the shard tests expect), MIT. The Reed–Solomon codec itself is this crate's own.
 
 Published algorithms implemented from their papers: J-UNIWARD (Holub, Fridrich, Denemark 2014), J-MiPOD (Cogranne, Giboulot, Bas 2021), J-CRFW (Pan et al. 2024), UERD (Guo et al. 2015), syndrome-trellis codes (Filler, Judas, Fridrich 2011), wet-paper codes (Fridrich, Goljan, Soukal 2004).
