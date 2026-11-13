@@ -194,10 +194,10 @@ fn threshold() -> bool {
     let pair = [(2, parts[2].as_slice()), (0, parts[0].as_slice())];
     let one = [(1, parts[1].as_slice())];
     matches!(
-        crate::threshold::join(&pair, 3, &set),
+        crate::threshold::join(&pair, &set),
         crate::threshold::Joined::Message(m) if &m[..] == b"self-test key share"
     ) && matches!(
-        crate::threshold::join(&one, 3, &set),
+        crate::threshold::join(&one, &set),
         crate::threshold::Joined::Unreadable
     )
 }

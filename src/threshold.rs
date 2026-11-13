@@ -157,20 +157,23 @@ pub(crate) enum Joined {
     Unreadable,
 }
 
-/// Restores the encoded message from `(photo number, payload)` pairs of one set of `count`
-/// photos.
-pub(crate) fn join(payloads: &[(usize, &[u8])], count: usize, set: &[u8]) -> Joined {
-    join_checked(payloads, count, set).unwrap_or(Joined::Unreadable)
+/// Restores the encoded message from `(photo number, payload)` pairs of one set. How many
+/// photos were issued is not needed, so a set that was given more photos later reads the same.
+pub(crate) fn join(payloads: &[(usize, &[u8])], set: &[u8]) -> Joined {
+    join_checked(payloads, set).unwrap_or(Joined::Unreadable)
 }
 
-fn join_checked(payloads: &[(usize, &[u8])], count: usize, set: &[u8]) -> Option<Joined> {
+fn join_checked(payloads: &[(usize, &[u8])], set: &[u8]) -> Option<Joined> {
     let k = usize::from(needed(payloads.first()?.1)?);
     let parsed: Vec<(usize, Fields<'_>)> = payloads
         .iter()
         .map(|&(i, p)| fields(p).map(|f| (i, f)))
         .collect::<Option<_>>()?;
     let first = &parsed.first()?.1;
-    if parsed.iter().any(|(index, _)| *index >= count) {
+    if parsed
+        .iter()
+        .any(|(index, _)| *index >= crate::shard::PIECES_MAX)
+    {
         return None;
     }
     let pieces: Vec<(usize, &[u8])> = parsed.iter().map(|(i, f)| (*i, f.shard)).collect();
@@ -220,17 +223,17 @@ mod tests {
             PAYLOAD_OVERHEAD + shard_bytes(MESSAGE.len(), 2)
         );
         for pick in [[0, 1], [0, 2], [2, 1]] {
-            let Joined::Message(joined) = join(&pairs(&parts, &pick), 3, &set) else {
+            let Joined::Message(joined) = join(&pairs(&parts, &pick), &set) else {
                 panic!("{pick:?} did not join");
             };
             assert_eq!(&joined[..], MESSAGE);
         }
         assert!(matches!(
-            join(&pairs(&parts, &[1]), 3, &set),
+            join(&pairs(&parts, &[1]), &set),
             Joined::Unreadable
         ));
         assert!(matches!(
-            join(&pairs(&parts, &[0, 1]), 3, &[6; 16]),
+            join(&pairs(&parts, &[0, 1]), &[6; 16]),
             Joined::Unreadable
         ));
     }
@@ -239,12 +242,12 @@ mod tests {
     fn three_of_five_need_three() {
         let set = [7; 16];
         let parts = split(MESSAGE, 3, 5, &set, &mut Counter(9)).unwrap();
-        let Joined::Message(joined) = join(&pairs(&parts, &[4, 1, 3]), 5, &set) else {
+        let Joined::Message(joined) = join(&pairs(&parts, &[4, 1, 3]), &set) else {
             panic!("three of five did not join");
         };
         assert_eq!(&joined[..], MESSAGE);
         assert!(matches!(
-            join(&pairs(&parts, &[4, 1]), 5, &set),
+            join(&pairs(&parts, &[4, 1]), &set),
             Joined::Unreadable
         ));
         let mut forged = parts[2].to_vec();
@@ -257,7 +260,7 @@ mod tests {
             (3, parts[3].as_slice()),
             (2, forged.as_slice()),
         ];
-        assert!(matches!(join(&mixed, 5, &set), Joined::Inconsistent));
+        assert!(matches!(join(&mixed, &set), Joined::Inconsistent));
     }
 
     #[test]

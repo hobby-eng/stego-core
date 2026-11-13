@@ -107,6 +107,17 @@ impl Part {
         self.index
     }
 
+    /// What makes parts one set: the set, the scheme and, for a split, how many parts it has.
+    /// A k-of-n set leaves out how many photos were issued, so photos added to it later join it.
+    const fn identity(&self) -> ([u8; SET_BYTES], u8, u16) {
+        let count = if self.scheme == THRESHOLD {
+            0
+        } else {
+            self.count
+        };
+        (self.set, self.scheme, count)
+    }
+
     pub(crate) const fn count(&self) -> u16 {
         self.count
     }
@@ -135,21 +146,19 @@ pub(crate) enum Assembly {
 /// Joins the parts of one set: a set with enough parts if there is one, else the set with the
 /// most parts; parts of other sets are ignored.
 pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
-    parts.sort_by(|a, b| {
-        (a.set, a.scheme, a.count, a.index).cmp(&(b.set, b.scheme, b.count, b.index))
-    });
+    parts.sort_by_key(|p| (p.identity(), p.index));
     // The same part read twice (the same photo from two folders) counts once; two different
     // parts under one number are a conflict, never a silent choice.
     let mut conflict = false;
     parts.dedup_by(|a, b| {
-        let same_place = (a.set, a.scheme, a.count, a.index) == (b.set, b.scheme, b.count, b.index);
+        let same_place = (a.identity(), a.index) == (b.identity(), b.index);
         conflict |= same_place && a.payload != b.payload;
         same_place
     });
     if conflict {
         return Some(Assembly::Conflict);
     }
-    let same = |a: &Part, b: &Part| (a.set, a.scheme, a.count) == (b.set, b.scheme, b.count);
+    let same = |a: &Part, b: &Part| a.identity() == b.identity();
     let mut best: Option<(usize, usize)> = None;
     let mut start = 0;
     while start < parts.len() {
@@ -170,12 +179,7 @@ pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
     }
     let (start, end) = best?;
     let parts: Vec<Part> = parts.drain(start..end).collect();
-    let (set, scheme, count, needed) = (
-        parts[0].set,
-        parts[0].scheme,
-        parts[0].count,
-        parts[0].needed(),
-    );
+    let (set, scheme, needed) = (parts[0].set, parts[0].scheme, parts[0].needed());
     if parts.len() < needed {
         return Some(Assembly::Incomplete {
             found: parts.len(),
@@ -187,7 +191,7 @@ pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
             .iter()
             .map(|p| (usize::from(p.index), p.payload.as_slice()))
             .collect();
-        match threshold::join(&payloads, usize::from(count), &set) {
+        match threshold::join(&payloads, &set) {
             threshold::Joined::Message(encoded) => encoded,
             threshold::Joined::Inconsistent => return Some(Assembly::Conflict),
             // Enough authenticated parts that still do not open: report it, never "nothing".
@@ -262,6 +266,35 @@ mod tests {
                 found: 1,
                 needed: 2
             })
+        ));
+    }
+
+    #[test]
+    fn a_threshold_part_issued_later_joins_its_set() {
+        let content = Content::text("abandon ability able").unwrap();
+        let parts = spread(&content, &[1, 1, 1], Some(2), &mut Counter(6)).unwrap();
+        // The third photo as if it had been issued after the set grew to five.
+        let mut later = parts[2].to_vec();
+        later[SET_BYTES + 3..SET_BYTES + 5].copy_from_slice(&5_u16.to_be_bytes());
+        let read = vec![
+            Part::parse(&parts[0]).unwrap(),
+            Part::parse(&later).unwrap(),
+        ];
+        let Some(Assembly::Complete(back)) = assemble(read) else {
+            panic!("a part issued later did not join");
+        };
+        assert!(back.same_as(&content));
+        // A split keeps its count: a slice that says otherwise is another set.
+        let split = spread(&content, &[1, 1], None, &mut Counter(7)).unwrap();
+        let mut other = split[1].to_vec();
+        other[SET_BYTES + 3..SET_BYTES + 5].copy_from_slice(&3_u16.to_be_bytes());
+        let read = vec![
+            Part::parse(&split[0]).unwrap(),
+            Part::parse(&other).unwrap(),
+        ];
+        assert!(matches!(
+            assemble(read),
+            Some(Assembly::Incomplete { found: 1, .. })
         ));
     }
 
