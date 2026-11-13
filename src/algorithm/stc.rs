@@ -113,42 +113,57 @@ pub fn binary_embed(
 
 /// Solves the segments, on every core where the platform has threads. Each result depends only
 /// on its own segment, so the order of work never changes the output.
-#[cfg(not(target_arch = "wasm32"))]
 fn run_segments<J: Sync>(
     jobs: &[J],
     solve: &(dyn Fn(&J) -> Result<Vec<u8>, StcError> + Sync),
 ) -> Result<Vec<Vec<u8>>, StcError> {
+    parallel_map(jobs, solve).into_iter().collect()
+}
+
+/// `f` of every job, in the jobs' order, on every core where the platform has threads.
+#[cfg(not(target_arch = "wasm32"))]
+fn parallel_map<J: Sync, R: Send>(jobs: &[J], f: &(dyn Fn(&J) -> R + Sync)) -> Vec<R> {
     let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     if threads < 2 || jobs.len() < 2 {
-        return jobs.iter().map(solve).collect();
+        return jobs.iter().map(f).collect();
     }
     let per = jobs.len().div_ceil(threads);
     std::thread::scope(|scope| {
         let handles: Vec<_> = jobs
             .chunks(per)
-            .map(|chunk| scope.spawn(move || chunk.iter().map(solve).collect::<Vec<_>>()))
+            .map(|chunk| scope.spawn(move || chunk.iter().map(f).collect::<Vec<R>>()))
             .collect();
-        let mut out = Vec::with_capacity(jobs.len());
-        for handle in handles {
+        handles
+            .into_iter()
             // A panic in a worker is a defect of this module; it is passed on unchanged.
-            let results = handle
-                .join()
-                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-            for result in results {
-                out.push(result?);
-            }
-        }
-        Ok(out)
+            .flat_map(|h| {
+                h.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
     })
 }
 
-/// Solves the segments one after another: a browser module has no threads.
+/// `f` of every job, one after another: a browser module has no threads.
 #[cfg(target_arch = "wasm32")]
-fn run_segments<J: Sync>(
-    jobs: &[J],
-    solve: &(dyn Fn(&J) -> Result<Vec<u8>, StcError> + Sync),
-) -> Result<Vec<Vec<u8>>, StcError> {
-    jobs.iter().map(solve).collect()
+fn parallel_map<J: Sync, R: Send>(jobs: &[J], f: &(dyn Fn(&J) -> R + Sync)) -> Vec<R> {
+    jobs.iter().map(f).collect()
+}
+
+/// Elements summed by one worker; fixed, so that the sum is the same on every machine.
+const SUM_CHUNK: usize = 1 << 16;
+
+/// `Σ part(i)` over `0..n`, summed per fixed chunk and then chunk by chunk in order: the same
+/// number however many cores run it.
+fn chunked_sum(n: usize, part: &(dyn Fn(usize) -> f64 + Sync)) -> f64 {
+    let chunks: Vec<std::ops::Range<usize>> = (0..n.div_ceil(SUM_CHUNK))
+        .map(|c| c * SUM_CHUNK..((c + 1) * SUM_CHUNK).min(n))
+        .collect();
+    parallel_map(&chunks, &|range: &std::ops::Range<usize>| {
+        range.clone().map(part).sum::<f64>()
+    })
+    .iter()
+    .sum()
 }
 
 /// Columns between two stored cost vectors of the trellis.
@@ -692,13 +707,11 @@ pub fn solve_lambda_near(
 
 /// Finds λ so that the optimal change distribution carries `bits` bits.
 pub fn solve_lambda(costs: &Costs, bits: f64) -> Result<f64, StcError> {
+    let n = costs.plus.len().min(costs.minus.len());
     let payload = |lambda: f64| -> f64 {
-        costs
-            .plus
-            .iter()
-            .zip(&costs.minus)
-            .map(|(&p, &m)| entropy3(change_probabilities(lambda, p, m)))
-            .sum()
+        chunked_sum(n, &|i| {
+            entropy3(change_probabilities(lambda, costs.plus[i], costs.minus[i]))
+        })
     };
     if payload(0.0) <= bits {
         return Err(StcError::Capacity);
@@ -717,7 +730,8 @@ pub fn solve_lambda(costs: &Costs, bits: f64) -> Result<f64, StcError> {
         } else {
             high = mid;
         }
-        if high - low <= high * 1e-12 {
+        // λ only weighs the costs against each other, and the reader never needs it.
+        if high - low <= high * 1e-9 {
             break;
         }
     }
