@@ -62,6 +62,38 @@ The model matters only to the writer; the reader never needs it, so the default 
 - passes `t = 3 × (PIM + 1)`, PIM from 0 to 1,023;
 - memory `m = (2 + MEM mod 2) × 2^(16 + ⌊MEM / 2⌋)` KiB, MEM from 0 to 29: 128, 192, 256, 384, 512, 768 MiB, 1 GiB, … 3 TiB.
 
+Every memory level:
+
+| Level | Memory  | Level | Memory  |
+| ----- | ------- | ----- | ------- |
+| 0     | 128 MiB | 15    | 24 GiB  |
+| 1     | 192 MiB | 16    | 32 GiB  |
+| 2     | 256 MiB | 17    | 48 GiB  |
+| 3     | 384 MiB | 18    | 64 GiB  |
+| 4     | 512 MiB | 19    | 96 GiB  |
+| 5     | 768 MiB | 20    | 128 GiB |
+| 6     | 1 GiB   | 21    | 192 GiB |
+| 7     | 1.5 GiB | 22    | 256 GiB |
+| 8     | 2 GiB   | 23    | 384 GiB |
+| 9     | 3 GiB   | 24    | 512 GiB |
+| 10    | 4 GiB   | 25    | 768 GiB |
+| 11    | 6 GiB   | 26    | 1 TiB   |
+| 12    | 8 GiB   | 27    | 1.5 TiB |
+| 13    | 12 GiB  | 28    | 2 TiB   |
+| 14    | 16 GiB  | 29    | 3 TiB   |
+
+Some PIMs (any whole number from 0 to 1,023 is allowed):
+
+| PIM   | Passes |
+| ----- | ------ |
+| 0     | 3      |
+| 1     | 6      |
+| 9     | 30     |
+| 99    | 300    |
+| 1,023 | 3,072  |
+
+Time grows with both: twice the memory or twice the passes takes about twice as long.
+
 Neither number is stored; the reader enters them. Level 0 opens on phones and in browsers; a browser cannot go past about 2 GiB (level 8).
 
 **Key separation.** HKDF-SHA-256 derives, for each layer and site rule, the key of the site order, the seed of the coder's matrix and the record cipher's key.
