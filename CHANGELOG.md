@@ -12,4 +12,4 @@ First draft of the core; the record format is not frozen.
 - Protection: secrets, keys and the Argon2id work area in locked or secret memory, wiped; process isolation for the host program.
 - Every new set is read back with each password and each message's SHA-256 compared before it is returned.
 - Room per message (recommended and maximum, the limiting photo, how many photos may be lost) and an inspection of any file for a details window.
-- Startup and full self-tests against published known answers.
+- Startup and full self-tests against published known answers and independent implementations: libjpeg's reading of the sample photo, Shamir shares computed by hand, Argon2id through the key path's own memory; the trellis reading is frozen at this format.

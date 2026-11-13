@@ -107,26 +107,13 @@ impl Keys {
         context: &[u8; KEY_BYTES],
     ) -> Result<Self, StegoError> {
         let work = password.work();
-        let parameters = Params::new(work.memory_kib(), work.passes(), KDF_LANES, Some(KEY_BYTES))
-            .map_err(|_| StegoError::Crypto)?;
-        let area_bytes = parameters
-            .block_count()
-            .checked_mul(Block::SIZE)
-            .ok_or(StegoError::Memory)?;
-        // The work area holds every intermediate block of the password's stretch: pages of its
-        // own, locked where the limit allows and wiped before they are given back, as mhfe_core's
-        // engine keeps them.
-        let mut area = Pages::work_area(area_bytes).ok_or(StegoError::Memory)?;
         let mut root = Secret::zeroed(KEY_BYTES);
-        let stretched = Argon2::new(Algorithm::Argon2id, Version::V0x13, parameters)
-            .hash_password_into_with_memory(
-                password.bytes(),
-                context,
-                root.as_mut_bytes(),
-                blocks(&mut area),
-            );
-        area.as_mut_slice().zeroize();
-        stretched.map_err(|_| StegoError::Crypto)?;
+        stretch(
+            password.bytes(),
+            context,
+            (work.memory_kib(), work.passes()),
+            root.as_mut_bytes(),
+        )?;
         Ok(Self { root })
     }
 
@@ -187,6 +174,29 @@ impl LayerKeys {
         }
         Ok(order)
     }
+}
+
+/// Argon2id of `password` with `salt` at `(memory KiB, passes)` and [`KDF_LANES`] lanes into
+/// `out`. The work area holds every intermediate block of the stretch: pages of its own, locked
+/// where the limit allows and wiped before they are given back. The self-test runs this same
+/// path at a small memory.
+pub(crate) fn stretch(
+    password: &[u8],
+    salt: &[u8],
+    (memory_kib, passes): (u32, u32),
+    out: &mut [u8],
+) -> Result<(), StegoError> {
+    let parameters = Params::new(memory_kib, passes, KDF_LANES, Some(out.len()))
+        .map_err(|_| StegoError::Crypto)?;
+    let area_bytes = parameters
+        .block_count()
+        .checked_mul(Block::SIZE)
+        .ok_or(StegoError::Memory)?;
+    let mut area = Pages::work_area(area_bytes).ok_or(StegoError::Memory)?;
+    let stretched = Argon2::new(Algorithm::Argon2id, Version::V0x13, parameters)
+        .hash_password_into_with_memory(password, salt, out, blocks(&mut area));
+    area.as_mut_slice().zeroize();
+    stretched.map_err(|_| StegoError::Crypto)
 }
 
 /// The work area as Argon2 blocks (a deliberate copy of `blocks` in mhfe_core's

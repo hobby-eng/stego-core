@@ -1,7 +1,8 @@
 //! Known answers of every part (CORE-27): a host runs [`startup_self_test`] before it opens its
 //! controls and keeps them closed when a check fails; [`full_self_test`] adds the slow checks on
-//! request (CORE-30). Expected values come from published vectors where they exist; the rest
-//! are round trips through the code under test, named as such.
+//! request (CORE-30). Expected values come from published vectors or an independent
+//! implementation where they exist; a format's own frozen answers and round trips through the
+//! code under test are named as such.
 
 mod sample;
 
@@ -54,7 +55,15 @@ pub fn startup_self_test() -> SelfTest {
         ("HKDF-SHA-256: RFC 5869 A.1", hkdf_sha256),
         ("XChaCha20-Poly1305: draft-irtf-cfrg-xchacha A.1", xchacha),
         ("Argon2id: RFC 9106 5.3", argon2id),
+        (
+            "Argon2id through the key path's own pages equals the library's path (64 KiB, 1 lane)",
+            stretch,
+        ),
         ("Reed–Solomon: 01 02 03 04 gives parity 45 5E", reed_solomon),
+        (
+            "Shamir: shares built by hand over GF(2^8), polynomial 0x11B, open in vsss-rs",
+            shamir,
+        ),
         (
             "Shamir and dispersal: 2 of 3 open, 1 does not (round trip)",
             threshold,
@@ -64,8 +73,16 @@ pub fn startup_self_test() -> SelfTest {
             trellis,
         ),
         (
+            "Syndrome-trellis code: a fixed vector reads as this format always read it",
+            trellis_frozen,
+        ),
+        (
             "JPEG: an independent encoder's photo re-encodes to its exact bytes",
             jpeg,
+        ),
+        (
+            "JPEG: the sample's luma coefficients equal libjpeg's (SHA-256)",
+            jpeg_luma,
         ),
     ];
     SelfTest {
@@ -173,6 +190,28 @@ fn argon2id() -> bool {
         && tag.as_slice() == hex("0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659")
 }
 
+/// The product stretches in pages of its own (`keys::stretch`); the RFC check above runs the
+/// library's own memory. Both paths at the same small settings must agree.
+fn stretch() -> bool {
+    let (password, salt) = (b"public-test-password", [42_u8; 32]);
+    let mut own = [0_u8; 32];
+    let mut library = [0_u8; 32];
+    let Ok(params) = ParamsBuilder::new()
+        .m_cost(64)
+        .t_cost(3)
+        .p_cost(crate::KDF_LANES)
+        .output_len(32)
+        .build()
+    else {
+        return false;
+    };
+    crate::keys::stretch(password, &salt, (64, 3), &mut own).is_ok()
+        && Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+            .hash_password_into(password, &salt, &mut library)
+            .is_ok()
+        && own == library
+}
+
 fn reed_solomon() -> bool {
     let Ok(code) = Code::new(4) else {
         return false;
@@ -183,6 +222,28 @@ fn reed_solomon() -> bool {
     };
     let rebuilt = code.rebuild(&[(5, &p5), (1, &[2]), (4, &p4), (3, &[4])]);
     p4 == [0x45] && p5 == [0x5E] && rebuilt.is_ok_and(|d| d == [[1], [2], [3], [4]])
+}
+
+/// Shares of the secret 53 CA 00 FF for 3 of 5, computed outside this crate by Shamir's formula
+/// f(x) = s + a1·x + a2·x² over GF(2^8) with the AES polynomial 0x11B, a1 = 01 02 03 04 and
+/// a2 = 10 20 30 40; each share is its number, then one value per secret byte, as vsss-rs
+/// writes them.
+fn shamir() -> bool {
+    let secret = [0x53, 0xca, 0x00, 0xff];
+    let shares: [[u8; 5]; 5] = [
+        [0x01, 0x42, 0xe8, 0x33, 0xbb],
+        [0x02, 0x11, 0x4e, 0xc6, 0xec],
+        [0x03, 0x00, 0x6c, 0xf5, 0xa8],
+        [0x04, 0x4c, 0xf4, 0x21, 0x83],
+        [0x05, 0x5d, 0xd6, 0x12, 0xc7],
+    ];
+    let open = |pick: &[usize]| {
+        let chosen: Vec<Vec<u8>> = pick.iter().map(|&i| shares[i].to_vec()).collect();
+        vsss_rs::Gf256::combine_bytes(&chosen).ok()
+    };
+    open(&[0, 1, 2]).as_deref() == Some(&secret[..])
+        && open(&[4, 1, 3]).as_deref() == Some(&secret[..])
+        && open(&[0, 1]).as_deref() != Some(&secret[..])
 }
 
 fn threshold() -> bool {
@@ -231,8 +292,47 @@ fn trellis() -> bool {
     read == message && prefix == message
 }
 
+/// What the readers make of a fixed vector, frozen at this format: a change to the matrix
+/// columns or the segment layout would make photos written before unreadable, and a round trip
+/// alone would not see it. No outside source exists for this answer; it is this format's own.
+fn trellis_frozen() -> bool {
+    let reading = trellis_reading();
+    reading.is_some_and(|digest| {
+        digest.as_slice() == hex("78cb8e44b0f16f4c65dd54435b9a820567fda2725ff1c5453b977583d61aeb53")
+    })
+}
+
+/// SHA-256 of the 256 bits both readers take from 4096 fixed bits with column seed 77, or
+/// `None` when the two readers disagree.
+fn trellis_reading() -> Option<[u8; 32]> {
+    let n = 4096;
+    let mut stego = vec![0_u8; n];
+    Fixed(11).fill(&mut stego).ok()?;
+    let stego: Vec<u8> = stego.iter().map(|b| b & 1).collect();
+    let cols = columns(n, HEIGHT, 77);
+    let read = binary_extract(&stego, 256, &cols, HEIGHT, SEGMENT_BITS);
+    let prefix = prefix_extract(
+        &column_prefix(&stego, &cols, HEIGHT),
+        256,
+        HEIGHT,
+        SEGMENT_BITS,
+    );
+    (read == prefix).then(|| Sha256::digest(&read).into())
+}
+
 fn jpeg() -> bool {
     Cover::new(sample::SAMPLE.to_vec()).is_ok_and(|cover| cover.bytes() == sample::SAMPLE)
+}
+
+/// The decoder against an independent one: libjpeg (libjpeg-turbo 2.1.5 through jpeglib 1.0.2)
+/// read the sample's quantized luma coefficients, block rows top to bottom, each block in natural
+/// order, as little-endian i16; this is the SHA-256 of those bytes.
+fn jpeg_luma() -> bool {
+    crate::jpeg::Jpeg::read(sample::SAMPLE.to_vec()).is_ok_and(|jpeg| {
+        let bytes: Vec<u8> = jpeg.luma().iter().flat_map(|c| c.to_le_bytes()).collect();
+        Sha256::digest(&bytes).as_slice()
+            == hex("fb07aa1c20ed0c34425d045b48e66161dae4424a7a39b1195a83ecb63d253f46")
+    })
 }
 
 fn default_stretch() -> bool {
