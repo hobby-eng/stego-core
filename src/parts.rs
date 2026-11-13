@@ -374,8 +374,9 @@ pub(crate) struct Quorum {
 }
 
 impl Quorum {
-    /// The numbers below this were issued, as far as the photos at hand know: the largest count
-    /// any of them declares, whichever order they were given in.
+    /// The largest count any photo at hand declares, whichever order they were given in. A
+    /// number below it may never have been issued: a set can be given a number by name, past
+    /// others that stay free.
     pub(crate) const fn issued(&self) -> u16 {
         self.issued
     }
