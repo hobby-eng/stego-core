@@ -23,9 +23,9 @@ pub const RECOMMENDED_BPNZAC: f64 = 0.05;
 /// one site in nine bits at low rates, and about half of the changed sites can move both ways.
 pub(crate) const HIDDEN_SHARE: f64 = 0.05;
 const CONTEXT_LABEL: &[u8] = b"stego-core 1 photo";
-/// Working bytes a job keeps per site at its peak (costs, order, coder layers), measured on 12 and
-/// 48 megapixel photos with some room to spare.
-const BYTES_PER_SITE: u64 = 64;
+/// Working bytes a job keeps per site at its peak (costs, coder layers), measured on 12 and 48
+/// megapixel photos (0.46 and 1.77 GB) with some room to spare.
+const BYTES_PER_SITE: u64 = 40;
 /// Working bytes per luminance coefficient: the decoded plane, its copy for the cost model and
 /// the written plane.
 const BYTES_PER_COEFFICIENT: u64 = 8;

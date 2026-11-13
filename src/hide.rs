@@ -247,7 +247,6 @@ fn write_standard(
     let directions = sites.directions(jpeg, luma, rule);
     let keys = keys.layer(Layer::Standard, rule.id())?;
     let order = keys.order(sites.positions.len())?;
-    let lane = Lane::new(&sites, luma, &order);
     let costs = lane_costs(
         cover,
         settings.cost_model,
@@ -256,6 +255,12 @@ fn write_standard(
         bits,
         &order,
     )?;
+    // Each per-site buffer goes as soon as its last use is done: the trellis is the peak.
+    drop(directions);
+    let lane = Lane::new(&sites, luma, &order);
+    drop(order);
+    let (site_count, nonzero_ac) = (sites.positions.len(), sites.nonzero_ac);
+    drop(sites);
     let aad = associated(cover.context(), Layer::Standard.id(), rule.id(), body);
     let sealed = seal(plain, body, keys.cipher(), &aad, random)?;
     let result = write_ternary(&lane, &costs, &to_bits(&sealed), keys.coder)?;
@@ -263,8 +268,8 @@ fn write_standard(
     let changes = lane.apply(&result.stego, &mut out)?;
     Ok(Written {
         bytes: jpeg.encode(&out)?,
-        sites: sites.positions.len(),
-        nonzero_ac: sites.nonzero_ac,
+        sites: site_count,
+        nonzero_ac,
         changes,
         free: None,
         coded_bits: bits,
@@ -316,7 +321,6 @@ fn write_decoy(
     let decoy_keys = pair.decoy_keys.layer(Layer::Decoy, rule.id())?;
     let directions = sites.directions(jpeg, luma, rule);
     let order = decoy_keys.order(sites.positions.len())?;
-    let lane = Lane::new(&sites, luma, &order);
     let costs = lane_costs(
         cover,
         settings.cost_model,
@@ -325,6 +329,9 @@ fn write_decoy(
         bits,
         &order,
     )?;
+    drop(directions);
+    let lane = Lane::new(&sites, luma, &order);
+    drop(order);
     let aad = associated(cover.context(), Layer::Decoy.id(), rule.id(), body);
     let sealed = seal(pair.decoy_part, body, decoy_keys.cipher(), &aad, random)?;
     let mut write = write_binary(&lane, &costs, &to_bits(&sealed), decoy_keys.coder)?;

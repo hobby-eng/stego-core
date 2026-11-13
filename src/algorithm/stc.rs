@@ -483,7 +483,15 @@ pub fn ternary_embed(
     let mut last = StcError::Infeasible;
     for share in SPLITS {
         let first = ((expected * share).round() as usize).min(message.len());
-        match layered(cover, costs, &second_costs, message, first, seed, segment) {
+        match layered(
+            cover,
+            costs,
+            second_costs.clone(),
+            message,
+            first,
+            seed,
+            segment,
+        ) {
             Ok(mut result) => {
                 result.lambda = lambda;
                 return Ok(result);
@@ -525,7 +533,7 @@ pub fn ternary_embed_split(
         .zip(costs.plus.iter().zip(&costs.minus))
         .map(|(&x, (&p, &m))| element(x, p, m, lambda).second_cost)
         .collect();
-    let mut result = layered(cover, costs, &second_costs, message, first, seed, segment)?;
+    let mut result = layered(cover, costs, second_costs, message, first, seed, segment)?;
     result.lambda = lambda;
     Ok(result)
 }
@@ -534,7 +542,7 @@ pub fn ternary_embed_split(
 fn layered(
     cover: &[i32],
     costs: &Costs,
-    second_costs: &[f64],
+    second_costs: Vec<f64>,
     message: &[u8],
     first: usize,
     seed: u64,
@@ -544,12 +552,14 @@ fn layered(
     let seconds: Vec<u8> = cover.iter().map(|&x| second_bit(x)).collect();
     let chosen = binary_embed(
         &seconds,
-        second_costs,
+        &second_costs,
         &message[..first],
         &columns(n, HEIGHT, seed ^ 2),
         HEIGHT,
         segment,
     )?;
+    // The second-bit costs are done with; the parity layer's buffers take their place.
+    drop(second_costs);
     // Where the second bit flipped, the value is x + toward and its LSB is fixed.
     let mut parities = Vec::with_capacity(n);
     let mut lsb_costs = Vec::with_capacity(n);
