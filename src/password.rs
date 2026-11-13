@@ -1,6 +1,7 @@
 //! Record passwords: NFKD-normalized UTF-8 in a wiped owner (CORE-24).
 
 use crate::StegoError;
+use crate::protect::Secret;
 use std::fmt;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
@@ -13,7 +14,7 @@ pub const PASSWORD_MAX: usize = 1024;
 
 /// A password after Unicode NFKD. Spaces and case stay significant; nothing is trimmed.
 pub struct Password {
-    bytes: Zeroizing<Vec<u8>>,
+    bytes: Secret,
 }
 
 impl Password {
@@ -44,23 +45,25 @@ impl Password {
         if bytes.len() > PASSWORD_MAX {
             return Err(StegoError::PasswordLong);
         }
-        Ok(Self { bytes })
+        let mut locked = Secret::with_capacity(bytes.len());
+        locked.push(&bytes)?;
+        Ok(Self { bytes: locked })
     }
 
     /// Whether both passwords have the same normalized bytes.
     #[must_use]
     pub fn same_as(&self, other: &Self) -> bool {
-        self.bytes.len() == other.bytes.len()
+        self.bytes().len() == other.bytes().len()
             && self
-                .bytes
+                .bytes()
                 .iter()
-                .zip(other.bytes.iter())
+                .zip(other.bytes().iter())
                 .fold(0_u8, |acc, (a, b)| acc | (a ^ b))
                 == 0
     }
 
     pub(crate) fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.bytes.as_bytes()
     }
 }
 

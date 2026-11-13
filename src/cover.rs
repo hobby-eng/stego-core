@@ -7,6 +7,7 @@ use crate::content::CONTENT_HEADER;
 use crate::jpeg::{COEFFICIENTS, Jpeg};
 use crate::keys::KEY_BYTES;
 use crate::mode::{Mode, Settings};
+use crate::parts::PART_HEADER;
 use crate::record::{LENGTH_BYTES, bodies, record_bits};
 use crate::sites::Sites;
 use sha2::{Digest, Sha256};
@@ -22,6 +23,9 @@ pub const RECOMMENDED_BPNZAC: f64 = 0.05;
 /// one site in nine bits at low rates, and about half of the changed sites can move both ways.
 pub(crate) const HIDDEN_SHARE: f64 = 0.05;
 const CONTEXT_LABEL: &[u8] = b"stego-core 1 photo";
+/// Most luminance AC coefficients of a photo (about 65 megapixels): every rule keeps per-site
+/// buffers of some 30 bytes, which must stay within a browser's 4 GiB (CORE-50).
+const AC_MAX: usize = 64_000_000;
 /// The luminance table of T.81 table K.1 (natural order), the base of the quality estimate.
 const STANDARD_LUMA: [u16; COEFFICIENTS] = [
     16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
@@ -84,6 +88,10 @@ impl Cover {
     /// cannot use.
     pub fn new(bytes: Vec<u8>) -> Result<Self, StegoError> {
         let jpeg = Jpeg::read(bytes)?;
+        let (wide, high) = jpeg.frame().full_blocks();
+        if wide * high * (COEFFICIENTS - 1) > AC_MAX {
+            return Err(StegoError::ImageLarge);
+        }
         let context = context(&jpeg)?;
         Ok(Self { jpeg, context })
     }
@@ -160,7 +168,9 @@ fn text_bytes(bits: usize) -> usize {
     bodies()
         .take_while(|&body| record_bits(body) <= bits)
         .last()
-        .map_or(0, |body| body.saturating_sub(LENGTH_BYTES + CONTENT_HEADER))
+        .map_or(0, |body| {
+            body.saturating_sub(LENGTH_BYTES + PART_HEADER + CONTENT_HEADER)
+        })
 }
 
 /// The salt of every key: a hash of what no rule ever changes (the frame, the tables, the

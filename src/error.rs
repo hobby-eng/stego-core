@@ -44,12 +44,19 @@ pub enum StegoError {
     Random,
     /// A key derivation or cipher call failed.
     Crypto,
+    /// The system refused the memory of the password stretch.
+    Memory,
     /// A cost model refused its input.
     Costs(CostError),
     /// The syndrome coder could not place the message.
     Coding,
     /// The written photo did not read back with every password and hash.
     Verification,
+    /// A [`crate::protect::Secret`] has no room for the bytes pushed; nothing was written.
+    SecretFull {
+        /// Its capacity in bytes.
+        capacity: usize,
+    },
 }
 
 impl fmt::Display for StegoError {
@@ -86,10 +93,14 @@ impl fmt::Display for StegoError {
             }
             Self::Random => "the system's random source failed",
             Self::Crypto => "a key derivation or cipher step failed",
+            Self::Memory => "the system refused the 128 MiB the password stretch needs",
             Self::Costs(e) => return write!(f, "the cost model refused the photo: {e}"),
             Self::Coding => "the coder could not place the message; try a shorter message",
             Self::Verification => {
                 "the written photo did not read back correctly; nothing was saved"
+            }
+            Self::SecretFull { capacity } => {
+                return write!(f, "a secret buffer of {capacity} bytes is full");
             }
         };
         f.write_str(text)

@@ -9,7 +9,7 @@ use crate::cover::{Cover, MAX_BITS_PER_SITE};
 use crate::keys::Keys;
 use crate::parts::{Assembly, CARRIERS_MAX, Part, assemble};
 use crate::record::{associated, bodies, from_bits, open, record_bits};
-use crate::report::{Layer, ReadReport, RecordReport, parameters};
+use crate::report::{Digest, Layer, ReadReport, RecordReport, parameters};
 use crate::sites::{SiteRule, Sites};
 use crate::{Password, StegoError};
 use zeroize::Zeroizing;
@@ -98,7 +98,7 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
             let report = ReadReport {
                 files,
                 content_bytes: content.bytes().len(),
-                sha256: content.sha256(),
+                sha256: Digest::new(content.sha256()),
                 parameters: parameters(),
             };
             Reading::Complete(Revealed { content, report })
@@ -142,7 +142,7 @@ fn standard(cover: &Cover, keys: &Keys) -> Result<Option<Found>, StegoError> {
         for body in feasible(sites.positions.len()) {
             let bits = read_ternary(&lane.values, record_bits(body), lane_keys.coder);
             let aad = associated(cover.context(), Layer::Standard.id(), rule.id(), body);
-            if let Some(plain) = open(&from_bits(&bits), &lane_keys.cipher, &aad) {
+            if let Some(plain) = open(&from_bits(&bits), lane_keys.cipher(), &aad) {
                 return Ok(Some(Found {
                     plain,
                     layer: Layer::Standard,
@@ -165,7 +165,7 @@ fn decoy(cover: &Cover, keys: &Keys) -> Result<Option<Found>, StegoError> {
     for body in feasible(sites.positions.len()) {
         let bits = read_binary(&lane.values, record_bits(body), lane_keys.coder);
         let aad = associated(cover.context(), Layer::Decoy.id(), rule.id(), body);
-        if let Some(plain) = open(&from_bits(&bits), &lane_keys.cipher, &aad) {
+        if let Some(plain) = open(&from_bits(&bits), lane_keys.cipher(), &aad) {
             return Ok(Some(Found {
                 plain,
                 layer: Layer::Decoy,
@@ -193,7 +193,7 @@ fn hidden(cover: &Cover, keys: &Keys) -> Result<Option<Found>, StegoError> {
     for body in candidates {
         let bits = syndrome_bits(&words, record_bits(body));
         let aad = associated(cover.context(), Layer::Hidden.id(), rule.id(), body);
-        if let Some(plain) = open(&from_bits(&bits), &lane_keys.cipher, &aad) {
+        if let Some(plain) = open(&from_bits(&bits), lane_keys.cipher(), &aad) {
             return Ok(Some(Found {
                 plain,
                 layer: Layer::Hidden,

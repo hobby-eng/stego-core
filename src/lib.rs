@@ -13,6 +13,8 @@
 //!
 //! The record format is experimental until the detectability measurements are done.
 
+#![deny(unsafe_code)]
+
 pub mod algorithm;
 mod coding;
 mod content;
@@ -24,8 +26,10 @@ mod inspect;
 mod jpeg;
 mod keys;
 mod mode;
+mod os;
 mod parts;
 mod password;
+pub mod protect;
 mod random;
 mod record;
 mod report;
@@ -45,7 +49,7 @@ pub use parts::CARRIERS_MAX;
 pub use password::{PASSWORD_MAX, PASSWORD_MIN, Password};
 pub use random::Random;
 pub use report::{
-    FileReport, HideReport, Layer, Parameters, ReadReport, RecordReport, hex, parameters,
+    Digest, FileReport, HideReport, Layer, Parameters, ReadReport, RecordReport, hex, parameters,
 };
 pub use reveal::{Reading, Revealed, reveal};
 pub use sites::SiteRule;

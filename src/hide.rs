@@ -1,23 +1,18 @@
 //! Hiding: the message is split over the photos, each photo gets its record, and the new files
 //! are returned only after the whole set reads back with every password and the same SHA-256.
 
-use crate::coding::{
-    HIDDEN_CAP, HIDDEN_MARGIN, Lane, directional, write_binary, write_hidden, write_ternary,
-};
+use crate::coding::{Lane, directional, write_binary, write_coins, write_hidden, write_ternary};
 use crate::content::Content;
-use crate::cover::{Cover, HIDDEN_SHARE, MAX_BITS_PER_SITE};
+use crate::cover::{Cover, MAX_BITS_PER_SITE, RECOMMENDED_BPNZAC};
 use crate::keys::Keys;
 use crate::mode::{CostModel, Mode, Settings};
 use crate::parts::{CARRIERS_MAX, spread};
 use crate::random::Random;
 use crate::record::{associated, bodies, body_for, record_bits, seal, to_bits};
-use crate::report::{FileReport, HideReport, Layer, RecordReport, parameters};
+use crate::report::{Digest, FileReport, HideReport, Layer, RecordReport, parameters};
 use crate::reveal::{Reading, reveal};
 use crate::sites::{SiteRule, Sites};
 use crate::{Password, StegoError};
-
-/// Decoy sizes tried in turn when the decoy's changes leave too little room for the secret.
-const DECOY_ATTEMPTS: usize = 8;
 
 /// A message and the password that will open it.
 #[derive(Clone, Copy, Debug)]
@@ -80,7 +75,11 @@ pub fn hide(
     }
     let weights: Vec<usize> = covers
         .iter()
-        .map(|c| Sites::find(c.jpeg(), c.jpeg().luma(), settings.rule()).nonzero_ac)
+        .map(|c| {
+            Sites::find(c.jpeg(), c.jpeg().luma(), settings.rule())
+                .positions
+                .len()
+        })
         .collect();
     let secret_parts = spread(secret.content, &weights, settings.needed, random)?;
     let written: Vec<Written> = match (settings.mode, decoy) {
@@ -105,15 +104,29 @@ pub fn hide(
                     let secret_keys = Keys::derive(secret.password, cover.context())?;
                     let pair = Pair {
                         decoy_keys: &decoy_keys,
-                        secret_keys: &secret_keys,
                         decoy_part,
-                        secret_part,
+                        behind: Some((&secret_keys, secret_part.as_slice())),
                     };
                     write_decoy(cover, settings, &pair, random)
                 })
                 .collect::<Result<_, _>>()?
         }
-        _ => return Err(StegoError::DecoyChoice),
+        // A lone message in the decoy mode's form: its directions are coins, so the file looks
+        // the same as one that carries a secret behind its message.
+        (Mode::Decoy, None) => covers
+            .iter()
+            .zip(&secret_parts)
+            .map(|(cover, part)| {
+                let keys = Keys::derive(secret.password, cover.context())?;
+                let pair = Pair {
+                    decoy_keys: &keys,
+                    decoy_part: part,
+                    behind: None,
+                };
+                write_decoy(cover, settings, &pair, random)
+            })
+            .collect::<Result<_, _>>()?,
+        (Mode::Standard, Some(_)) => return Err(StegoError::DecoyChoice),
     };
     finish(written, settings, secret, decoy)
 }
@@ -166,8 +179,8 @@ fn finish(
         settings: *settings,
         files,
         secret_bytes: secret.content.bytes().len(),
-        secret_sha256: secret.content.sha256(),
-        decoy: decoy.map(|d| (d.content.bytes().len(), d.content.sha256())),
+        secret_sha256: Digest::new(secret.content.sha256()),
+        decoy: decoy.map(|d| (d.content.bytes().len(), Digest::new(d.content.sha256()))),
         parameters: parameters(),
     };
     Ok(HideResult {
@@ -233,7 +246,7 @@ fn write_standard(
         &order,
     )?;
     let aad = associated(cover.context(), Layer::Standard.id(), rule.id(), body);
-    let sealed = seal(plain, body, &keys.cipher, &aad, random)?;
+    let sealed = seal(plain, body, keys.cipher(), &aad, random)?;
     let result = write_ternary(&lane, &costs, &to_bits(&sealed), keys.coder)?;
     let mut out = luma.to_vec();
     let changes = lane.apply(&result.stego, &mut out)?;
@@ -257,9 +270,23 @@ fn write_standard(
 /// The keys and parts of one photo in the decoy mode.
 struct Pair<'a> {
     decoy_keys: &'a Keys,
-    secret_keys: &'a Keys,
     decoy_part: &'a [u8],
-    secret_part: &'a [u8],
+    /// The secret's keys and part, when one hides behind the decoy.
+    behind: Option<(&'a Keys, &'a [u8])>,
+}
+
+/// The decoy's body: its own size, padded up to the photo's recommended room. The padding
+/// depends on the photo alone, never on a secret behind the decoy, so the decoy password shows
+/// the same size whether or not a secret exists.
+fn decoy_body(sites: &Sites, part: usize) -> Result<usize, StegoError> {
+    let recommended =
+        ((sites.nonzero_ac as f64 * RECOMMENDED_BPNZAC) as usize).min(limit_bits(sites));
+    let own = body_for(part)?;
+    let padded = bodies()
+        .take_while(|&b| record_bits(b) <= recommended)
+        .last()
+        .unwrap_or(own);
+    Ok(own.max(padded))
 }
 
 fn write_decoy(
@@ -270,91 +297,67 @@ fn write_decoy(
 ) -> Result<Written, StegoError> {
     let (jpeg, luma, rule) = (cover.jpeg(), cover.jpeg().luma(), SiteRule::Grow1);
     let sites = Sites::find(jpeg, luma, rule);
-    let hidden_body = body_for(pair.secret_part.len())?;
-    let hidden_bits = record_bits(hidden_body);
-    if hidden_bits > HIDDEN_CAP {
-        return Err(StegoError::HiddenLong);
+    let body = decoy_body(&sites, pair.decoy_part.len())?;
+    let bits = record_bits(body);
+    if bits > limit_bits(&sites) {
+        return Err(StegoError::MessageLong);
     }
-    let needed_free = hidden_bits + HIDDEN_MARGIN;
     let decoy_keys = pair.decoy_keys.layer(Layer::Decoy, rule.id())?;
-    let hidden_keys = pair.secret_keys.layer(Layer::Hidden, rule.id())?;
     let directions = sites.directions(jpeg, luma, rule);
     let order = decoy_keys.order(sites.positions.len())?;
     let lane = Lane::new(&sites, luma, &order);
-    let smallest = body_for(pair.decoy_part.len())?;
-    if record_bits(smallest) > limit_bits(&sites) {
-        return Err(StegoError::MessageLong);
-    }
-    // A decoy is padded until its expected changes leave room for the secret behind it.
-    let payload_free = matches!(settings.cost_model, CostModel::JUniward | CostModel::Uerd);
-    let mut cached = None;
-    for body in bodies()
-        .filter(|&b| b >= smallest && record_bits(b) as f64 * HIDDEN_SHARE >= needed_free as f64)
-        .take(DECOY_ATTEMPTS)
-    {
-        let bits = record_bits(body);
-        if bits > limit_bits(&sites) {
-            break;
-        }
-        let costs = match (&cached, payload_free) {
-            (Some(costs), true) => crate::algorithm::model::Costs::clone(costs),
-            _ => lane_costs(
-                cover,
-                settings.cost_model,
-                &sites,
-                &directions,
-                bits,
-                &order,
-            )?,
-        };
-        if payload_free {
-            cached = Some(costs.clone());
-        }
-        let aad = associated(cover.context(), Layer::Decoy.id(), rule.id(), body);
-        let sealed = seal(pair.decoy_part, body, &decoy_keys.cipher, &aad, random)?;
-        let mut write = write_binary(&lane, &costs, &to_bits(&sealed), decoy_keys.coder)?;
-        if write.free.len() < needed_free {
-            continue;
-        }
-        let free = write.free.len();
-        let hidden_aad = associated(cover.context(), Layer::Hidden.id(), rule.id(), hidden_body);
-        let hidden = seal(
-            pair.secret_part,
-            hidden_body,
-            &hidden_keys.cipher,
-            &hidden_aad,
-            random,
-        )?;
-        write_hidden(
-            &lane,
-            &mut write,
-            &to_bits(&hidden),
-            hidden_keys.coder,
-            random,
-        )?;
-        let mut out = luma.to_vec();
-        let changes = lane.apply(&write.stego, &mut out)?;
-        let header = crate::parts::PART_HEADER;
-        return Ok(Written {
-            bytes: jpeg.encode(&out)?,
-            sites: sites.positions.len(),
-            nonzero_ac: sites.nonzero_ac,
-            changes,
-            free: Some(free),
-            coded_bits: bits,
-            secret: record(
-                Layer::Hidden,
-                rule,
+    let costs = lane_costs(
+        cover,
+        settings.cost_model,
+        &sites,
+        &directions,
+        bits,
+        &order,
+    )?;
+    let aad = associated(cover.context(), Layer::Decoy.id(), rule.id(), body);
+    let sealed = seal(pair.decoy_part, body, decoy_keys.cipher(), &aad, random)?;
+    let mut write = write_binary(&lane, &costs, &to_bits(&sealed), decoy_keys.coder)?;
+    let free = write.free.len();
+    let header = crate::parts::PART_HEADER;
+    let secret = match pair.behind {
+        Some((secret_keys, secret_part)) => {
+            let hidden_body = body_for(secret_part.len())?;
+            let hidden_keys = secret_keys.layer(Layer::Hidden, rule.id())?;
+            let hidden_aad =
+                associated(cover.context(), Layer::Hidden.id(), rule.id(), hidden_body);
+            let hidden = seal(
+                secret_part,
                 hidden_body,
-                pair.secret_part.len() - header,
-            ),
-            decoy: Some(record(
-                Layer::Decoy,
-                rule,
-                body,
-                pair.decoy_part.len() - header,
-            )),
-        });
-    }
-    Err(StegoError::HiddenLong)
+                hidden_keys.cipher(),
+                &hidden_aad,
+                random,
+            )?;
+            write_hidden(
+                &lane,
+                &mut write,
+                &to_bits(&hidden),
+                hidden_keys.coder,
+                random,
+            )?;
+            record(Layer::Hidden, rule, hidden_body, secret_part.len() - header)
+        }
+        None => {
+            write_coins(&mut write, random)?;
+            record(Layer::Decoy, rule, body, pair.decoy_part.len() - header)
+        }
+    };
+    let mut out = luma.to_vec();
+    let changes = lane.apply(&write.stego, &mut out)?;
+    Ok(Written {
+        bytes: jpeg.encode(&out)?,
+        sites: sites.positions.len(),
+        nonzero_ac: sites.nonzero_ac,
+        changes,
+        free: Some(free),
+        coded_bits: bits,
+        secret,
+        decoy: pair
+            .behind
+            .map(|_| record(Layer::Decoy, rule, body, pair.decoy_part.len() - header)),
+    })
 }

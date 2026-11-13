@@ -214,10 +214,12 @@ pub(crate) fn join(
     let body_length = sealed.len().checked_sub(TAG_BYTES)?;
     let tag = Tag::try_from(&sealed[body_length..]).ok()?;
     let nonce = XNonce::try_from(first.nonce).ok()?;
-    let mut shares: Vec<Vec<u8>> = parsed.iter().map(|(_, f)| f.share.to_vec()).collect();
-    let key = sskr_combine(&shares).ok();
-    shares.iter_mut().for_each(Zeroize::zeroize);
-    let key = key?;
+    // Wiped on every return, early ones included.
+    let shares: Zeroizing<Vec<Vec<u8>>> =
+        Zeroizing::new(parsed.iter().map(|(_, f)| f.share.to_vec()).collect());
+    // Accepted: sskr 0.12's Secret has no wipe, so the restored key's copy inside it is freed
+    // unwiped; it lives only for this call.
+    let key = sskr_combine(&shares).ok()?;
     let mut plain = Zeroizing::new(sealed[..body_length].to_vec());
     let cipher = XChaCha20Poly1305::new_from_slice(key.data()).ok()?;
     cipher

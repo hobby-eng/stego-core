@@ -14,8 +14,9 @@ use crate::sites::Sites;
 /// Free sites the hidden record leaves to coins beyond its bits, so that its system of
 /// equations has a solution except with probability below 2^-64.
 pub(crate) const HIDDEN_MARGIN: usize = 64;
-/// Largest hidden record, in bits: the wet-paper solve grows with the square of its size.
-pub(crate) const HIDDEN_CAP: usize = 32_768;
+/// Largest hidden record, in bits: the wet-paper solve grows with the cube of its size (about
+/// 3.4 s at 8,192 bits on a laptop core, minutes at 32,768).
+pub(crate) const HIDDEN_CAP: usize = 8_192;
 
 /// One layer's sites in its keyed order, with their values.
 pub(crate) struct Lane {
@@ -145,6 +146,18 @@ pub(crate) fn read_binary(values: &[i32], bits: usize, seed: u64) -> Vec<u8> {
         HEIGHT,
         SEGMENT_BITS,
     )
+}
+
+/// Gives every free change a coin-chosen direction: the decoy mode without a secret behind it.
+pub(crate) fn write_coins(
+    write: &mut BinaryWrite,
+    random: &mut dyn Random,
+) -> Result<(), StegoError> {
+    for &j in &write.free {
+        let up = next_u64(random)? & 1 == 1;
+        write.stego[j] += if up { 1 } else { -1 };
+    }
+    Ok(())
 }
 
 /// Chooses the direction of every free change: the hidden record's bits through the wet-paper

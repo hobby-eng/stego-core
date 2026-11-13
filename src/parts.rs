@@ -129,14 +129,42 @@ pub(crate) enum Assembly {
     Incomplete { found: usize, needed: usize },
 }
 
-/// Joins the parts of the first set found; parts of other sets are ignored.
+/// Joins the parts of one set: a set with enough parts if there is one, else the set with the
+/// most parts; parts of other sets are ignored.
 pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
-    let first = parts.first()?;
-    let (set, scheme, count) = (first.set, first.scheme, first.count);
-    let needed = first.needed();
-    parts.retain(|p| p.set == set && p.scheme == scheme && p.count == count);
-    parts.sort_by_key(|p| p.index);
-    parts.dedup_by_key(|p| p.index);
+    parts.sort_by(|a, b| {
+        (a.set, a.scheme, a.count, a.index).cmp(&(b.set, b.scheme, b.count, b.index))
+    });
+    parts.dedup_by(|a, b| {
+        (a.set, a.scheme, a.count, a.index) == (b.set, b.scheme, b.count, b.index)
+    });
+    let same = |a: &Part, b: &Part| (a.set, a.scheme, a.count) == (b.set, b.scheme, b.count);
+    let mut best: Option<(usize, usize)> = None;
+    let mut start = 0;
+    while start < parts.len() {
+        let end = start
+            + parts[start..]
+                .iter()
+                .take_while(|p| same(p, &parts[start]))
+                .count();
+        let complete = end - start >= parts[start].needed();
+        let better = best.is_none_or(|(s, e)| {
+            let best_complete = e - s >= parts[s].needed();
+            (complete, end - start) > (best_complete, e - s)
+        });
+        if better {
+            best = Some((start, end));
+        }
+        start = end;
+    }
+    let (start, end) = best?;
+    let parts: Vec<Part> = parts.drain(start..end).collect();
+    let (set, scheme, count, needed) = (
+        parts[0].set,
+        parts[0].scheme,
+        parts[0].count,
+        parts[0].needed(),
+    );
     if parts.len() < needed {
         return Some(Assembly::Incomplete {
             found: parts.len(),

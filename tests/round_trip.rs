@@ -134,7 +134,7 @@ fn the_standard_mode_reads_back_with_its_password_only() {
     )
     .unwrap();
     let report = result.report();
-    assert_eq!(report.secret_sha256, secret.sha256());
+    assert_eq!(*report.secret_sha256.bytes(), secret.sha256());
     assert!(report.files[0].changes > 0);
     let covers = reread(result.files(), &[0]);
     assert_eq!(
@@ -325,4 +325,51 @@ fn the_room_the_core_reports_is_the_room_writing_finds() {
     )
     .unwrap_err();
     assert_eq!(error, StegoError::MessageLong);
+}
+
+#[test]
+fn the_decoy_password_sees_the_same_record_with_or_without_a_secret_behind_it() {
+    let cover = photo(800, 600, 20);
+    let decoy = Content::text("an ordinary note").unwrap();
+    let secret = Content::text("the real seed words").unwrap();
+    let (decoy_key, secret_key) = (password("decoy password 22"), password("secret password 1"));
+    let settings = Settings {
+        mode: Mode::Decoy,
+        ..Settings::default()
+    };
+    let with_secret = hide(
+        &[&cover],
+        &settings,
+        Secret {
+            content: &secret,
+            password: &secret_key,
+        },
+        Some(Secret {
+            content: &decoy,
+            password: &decoy_key,
+        }),
+        &mut TestRandom(21),
+    )
+    .unwrap();
+    let alone = hide(
+        &[&cover],
+        &settings,
+        Secret {
+            content: &decoy,
+            password: &decoy_key,
+        },
+        None,
+        &mut TestRandom(22),
+    )
+    .unwrap();
+    let seen = |files: &[Vec<u8>]| {
+        let covers = reread(files, &[0]);
+        let refs: Vec<&Cover> = covers.iter().collect();
+        let Reading::Complete(found) = reveal(&refs, &decoy_key).unwrap() else {
+            panic!("the decoy did not open");
+        };
+        let (_, _, record) = found.report().files[0];
+        (record.layer, record.body_bytes, record.record_bits)
+    };
+    assert_eq!(seen(with_secret.files()), seen(alone.files()));
 }

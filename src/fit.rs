@@ -90,7 +90,7 @@ pub fn fit(
             let recommended =
                 ((sites.nonzero_ac as f64 * RECOMMENDED_BPNZAC) as usize).min(maximum);
             Limits {
-                weight: sites.nonzero_ac,
+                weight: sites.positions.len(),
                 recommended,
                 maximum,
             }
@@ -128,7 +128,11 @@ pub fn fit(
             secret: room(secret, true),
             decoy: Some(room(decoy, false)),
         }),
-        _ => Err(StegoError::DecoyChoice),
+        (Mode::Decoy, None) => Ok(Fit {
+            secret: room(secret, false),
+            decoy: None,
+        }),
+        (Mode::Standard, Some(_)) => Err(StegoError::DecoyChoice),
     }
 }
 

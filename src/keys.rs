@@ -1,6 +1,8 @@
 //! One Argon2id stretch per password and photo; separate keys for each layer's order, coder and
 //! cipher.
 
+use crate::os::Pages;
+use crate::protect::Secret;
 use crate::report::Layer;
 use crate::{Password, StegoError};
 use argon2::{Algorithm, Argon2, Block, Params, Version};
@@ -8,7 +10,7 @@ use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Argon2id memory in KiB: 128 MiB, the cost an attacker pays for every guess.
 pub const KDF_MEMORY_KIB: u32 = 128 * 1024;
@@ -26,15 +28,15 @@ const CIPHER_LABEL: &[u8] = b"stego-core 1 cipher";
 
 /// The root key of one password in one photo.
 pub(crate) struct Keys {
-    root: Zeroizing<[u8; KEY_BYTES]>,
+    root: Secret,
 }
 
 /// The keys of one layer.
 pub(crate) struct LayerKeys {
-    order: Zeroizing<[u8; KEY_BYTES]>,
+    order: Secret,
     /// Seed of the syndrome coder's matrix columns or of the wet-paper columns.
     pub coder: u64,
-    pub cipher: Zeroizing<[u8; KEY_BYTES]>,
+    cipher: Secret,
 }
 
 impl Keys {
@@ -46,26 +48,36 @@ impl Keys {
     ) -> Result<Self, StegoError> {
         let parameters = Params::new(KDF_MEMORY_KIB, KDF_PASSES, KDF_LANES, Some(KEY_BYTES))
             .map_err(|_| StegoError::Crypto)?;
-        let mut memory = Zeroizing::new(vec![Block::default(); parameters.block_count()]);
-        let mut root = Zeroizing::new([0; KEY_BYTES]);
-        Argon2::new(Algorithm::Argon2id, Version::V0x13, parameters)
-            .hash_password_into_with_memory(password.bytes(), context, root.as_mut(), &mut memory)
-            .map_err(|_| StegoError::Crypto)?;
+        // The work area holds every intermediate block of the password's stretch: pages of its
+        // own, locked where the limit allows and wiped before they are given back, as mhfe_core's
+        // engine keeps them.
+        let mut area =
+            Pages::work_area(parameters.block_count() * Block::SIZE).ok_or(StegoError::Memory)?;
+        let mut root = Secret::zeroed(KEY_BYTES);
+        let stretched = Argon2::new(Algorithm::Argon2id, Version::V0x13, parameters)
+            .hash_password_into_with_memory(
+                password.bytes(),
+                context,
+                root.as_mut_bytes(),
+                blocks(&mut area),
+            );
+        area.as_mut_slice().zeroize();
+        stretched.map_err(|_| StegoError::Crypto)?;
         Ok(Self { root })
     }
 
     /// The keys of `layer` with site rule byte `rule`.
     pub(crate) fn layer(&self, layer: Layer, rule: u8) -> Result<LayerKeys, StegoError> {
-        let hkdf = Hkdf::<Sha256>::new(Some(ROOT_LABEL), self.root.as_ref());
+        let hkdf = Hkdf::<Sha256>::new(Some(ROOT_LABEL), self.root.as_bytes());
         let info = [layer.id(), rule];
-        let mut order = Zeroizing::new([0; KEY_BYTES]);
+        let mut order = Secret::zeroed(KEY_BYTES);
         let mut coder = Zeroizing::new([0; 8]);
-        let mut cipher = Zeroizing::new([0; KEY_BYTES]);
-        hkdf.expand_multi_info(&[ORDER_LABEL, &info], order.as_mut())
+        let mut cipher = Secret::zeroed(KEY_BYTES);
+        hkdf.expand_multi_info(&[ORDER_LABEL, &info], order.as_mut_bytes())
             .map_err(|_| StegoError::Crypto)?;
         hkdf.expand_multi_info(&[CODER_LABEL, &info], coder.as_mut())
             .map_err(|_| StegoError::Crypto)?;
-        hkdf.expand_multi_info(&[CIPHER_LABEL, &info], cipher.as_mut())
+        hkdf.expand_multi_info(&[CIPHER_LABEL, &info], cipher.as_mut_bytes())
             .map_err(|_| StegoError::Crypto)?;
         Ok(LayerKeys {
             order,
@@ -75,18 +87,23 @@ impl Keys {
     }
 
     #[cfg(test)]
-    pub(crate) fn root(&self) -> &[u8; KEY_BYTES] {
-        &self.root
+    pub(crate) fn root(&self) -> &[u8] {
+        self.root.as_bytes()
     }
 }
 
 impl LayerKeys {
+    /// The record cipher's key.
+    pub(crate) fn cipher(&self) -> &[u8] {
+        self.cipher.as_bytes()
+    }
+
     /// A keyed shuffle of `0..count`: the order in which the coder visits the sites, so that
     /// the changes spread over the whole photo.
     pub(crate) fn order(&self, count: usize) -> Result<Vec<u32>, StegoError> {
         let count32 = u32::try_from(count).map_err(|_| StegoError::ImageLarge)?;
         let mut order: Vec<u32> = (0..count32).collect();
-        let mut stream = ChaCha20::new_from_slices(self.order.as_ref(), &[0; 12])
+        let mut stream = ChaCha20::new_from_slices(self.order.as_bytes(), &[0; 12])
             .map_err(|_| StegoError::Crypto)?;
         let mut buffer = [0_u8; 8];
         for i in (1..order.len()).rev() {
@@ -106,6 +123,21 @@ impl LayerKeys {
         }
         Ok(order)
     }
+}
+
+/// The work area as Argon2 blocks (a deliberate copy of `blocks` in mhfe_core's
+/// `src/engine/native.rs`, CORE-10: a change goes to both).
+#[allow(
+    unsafe_code,
+    reason = "RustCrypto takes its memory as Blocks, and bytes become Blocks through a raw pointer"
+)]
+fn blocks(work_area: &mut Pages) -> &mut [Block] {
+    let area = work_area.as_mut_slice();
+    let count = area.len() / Block::SIZE;
+    // SAFETY: pages start on a page boundary, which meets a Block's alignment of 64; `count`
+    // Blocks fit in the area; a Block is 128 u64, of which every bit pattern is valid; and the
+    // result borrows the pages exclusively, as `area` did.
+    unsafe { std::slice::from_raw_parts_mut(area.as_mut_ptr().cast::<Block>(), count) }
 }
 
 #[cfg(test)]
@@ -132,13 +164,17 @@ mod tests {
     #[test]
     fn layers_and_rules_get_different_keys_and_orders() {
         let keys = Keys {
-            root: Zeroizing::new([7; KEY_BYTES]),
+            root: {
+                let mut root = Secret::with_capacity(KEY_BYTES);
+                root.push(&[7; KEY_BYTES]).unwrap();
+                root
+            },
         };
         let a = keys.layer(Layer::Standard, 1).unwrap();
         let b = keys.layer(Layer::Standard, 2).unwrap();
         let c = keys.layer(Layer::Hidden, 1).unwrap();
         assert_ne!(a.coder, b.coder);
-        assert_ne!(a.cipher[..], c.cipher[..]);
+        assert_ne!(a.cipher(), c.cipher());
         let order = a.order(1000).unwrap();
         let mut sorted = order.clone();
         sorted.sort_unstable();

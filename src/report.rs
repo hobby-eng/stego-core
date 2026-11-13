@@ -55,7 +55,7 @@ impl Layer {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Standard => "standard (ternary STC)",
-            Self::Decoy => "decoy (binary STC)",
+            Self::Decoy => "binary STC (decoy mode)",
             Self::Hidden => "behind the decoy (wet paper on change directions)",
         }
     }
@@ -119,9 +119,9 @@ pub struct HideReport {
     /// Size of the secret in bytes.
     pub secret_bytes: usize,
     /// SHA-256 of the secret, equal to the one read back.
-    pub secret_sha256: [u8; 32],
+    pub secret_sha256: Digest,
     /// Size and SHA-256 of the decoy, in the decoy mode.
-    pub decoy: Option<(usize, [u8; 32])>,
+    pub decoy: Option<(usize, Digest)>,
     /// The fixed parameters.
     pub parameters: Parameters,
 }
@@ -134,9 +134,39 @@ pub struct ReadReport {
     /// Size of the message in bytes.
     pub content_bytes: usize,
     /// SHA-256 of the message.
-    pub sha256: [u8; 32],
+    pub sha256: Digest,
     /// The fixed parameters.
     pub parameters: Parameters,
+}
+
+/// A message's SHA-256, for the person to compare. Unsalted, so a short message can be guessed
+/// from it without the password: a host shows it and never logs or stores it, and `Debug`
+/// prints it redacted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Digest([u8; 32]);
+
+impl Digest {
+    pub(crate) const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The hash.
+    #[must_use]
+    pub const fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Lower-case hexadecimal, for display.
+    #[must_use]
+    pub fn hex(&self) -> String {
+        hex(&self.0)
+    }
+}
+
+impl std::fmt::Debug for Digest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Digest(redacted)")
+    }
 }
 
 /// Lower-case hexadecimal of a hash, for display.

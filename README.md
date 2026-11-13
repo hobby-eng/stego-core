@@ -8,7 +8,7 @@ Status: experimental. The record format may still change while the detectability
 
 - Hides a text or a file in one or several baseline JPEG photos and reads it back.
 - Changes only quantized luminance AC coefficients by ±1 and rewrites the scan with the photo's own Huffman tables. Every other byte of the file stays as it was, and a photo whose unchanged coefficients do not re-encode to the same bytes is refused.
-- Two modes:
+- Two modes (the decoy mode also takes a lone message, whose file looks the same as one with a secret behind it):
   - standard: one record, ternary syndrome-trellis code (STC);
   - with decoy: a decoy with its own password, and the secret carried by the directions of the decoy's changes (a keyed wet-paper code). With only the decoy password, nothing shows that a second record exists.
 - Several photos: a message is split so that every photo is needed, or spread so that any `k` of `n` photos open it: each photo carries a Reed–Solomon shard of 1/k of the encrypted message and an SSKR (Shamir) share of its key. Both work in the decoy mode too, for the decoy and the secret alike.

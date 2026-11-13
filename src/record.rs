@@ -59,7 +59,7 @@ pub(crate) fn associated(context: &[u8; KEY_BYTES], layer: u8, rule: u8, body: u
 pub(crate) fn seal(
     plain_in: &[u8],
     body: usize,
-    key: &[u8; KEY_BYTES],
+    key: &[u8],
     aad: &[u8],
     random: &mut dyn Random,
 ) -> Result<Zeroizing<Vec<u8>>, StegoError> {
@@ -84,7 +84,7 @@ pub(crate) fn seal(
 }
 
 /// Decrypts a record; `None` when the key, the size class or the photo does not match.
-pub(crate) fn open(record: &[u8], key: &[u8; KEY_BYTES], aad: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+pub(crate) fn open(record: &[u8], key: &[u8], aad: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
     let body = record.len().checked_sub(NONCE_BYTES + TAG_BYTES)?;
     let nonce = XNonce::try_from(&record[..NONCE_BYTES]).ok()?;
     let tag = Tag::try_from(&record[NONCE_BYTES + body..]).ok()?;
