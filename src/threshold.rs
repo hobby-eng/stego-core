@@ -6,10 +6,10 @@
 use crate::StegoError;
 use crate::random::Random;
 use crate::shard::Code;
+use chacha20::ChaCha20Rng;
+use chacha20::rand_core::SeedableRng;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{Tag, XChaCha20Poly1305, XNonce};
-use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::SeedableRng;
 use vsss_rs::Gf256;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -99,7 +99,9 @@ fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Vec<u8>>, StegoEr
 }
 
 /// One share of `key` per photo, any `needed` of which restore it. The polynomial's
-/// coefficients come from a generator seeded with the host's fresh randomness.
+/// coefficients come from a ChaCha20 generator seeded with the host's fresh randomness; the
+/// generator wipes its state and its buffer when dropped (chacha20's `zeroize` feature), so
+/// nothing that could make the coefficients again stays behind.
 fn shares(
     key: &[u8; KEY_BYTES],
     needed: u8,
@@ -109,13 +111,11 @@ fn shares(
     let mut seed = Zeroizing::new([0; KEY_BYTES]);
     random.fill(seed.as_mut())?;
     let mut generator = ChaCha20Rng::from_seed(*seed);
-    let mut shares = Gf256::split_bytes(usize::from(needed), count, key, &mut generator)
-        .map_err(|_| StegoError::Threshold)?;
+    let split = Gf256::split_bytes(usize::from(needed), count, key, &mut generator);
+    drop(generator);
+    let mut shares = split.map_err(|_| StegoError::Threshold)?;
     let out = shares.iter().map(|s| Zeroizing::new(s.clone())).collect();
     shares.iter_mut().for_each(Zeroize::zeroize);
-    // The generator's state could make the coefficients again: it is wiped too.
-    generator = ChaCha20Rng::from_seed([0; KEY_BYTES]);
-    drop(generator);
     Ok(out)
 }
 
