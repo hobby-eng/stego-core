@@ -150,12 +150,15 @@ fn largest_plain(bits: usize) -> usize {
 /// The largest encoded message whose parts fit plain records of at most `caps` bytes.
 fn largest_encoded(caps: &[usize], weights: &[usize], needed: Option<u8>) -> usize {
     if needed.is_some() {
-        // Every photo of a k-of-n set carries the whole ciphertext and one share.
+        // Every photo of a k-of-n set carries one shard of 1/k of the ciphertext and one key
+        // share; the shards are of equal size, so the smallest photo bounds them all.
         let overhead = PART_HEADER + threshold::PAYLOAD_OVERHEAD;
-        return caps
+        let shard = caps
             .iter()
             .min()
             .map_or(0, |&cap| cap.saturating_sub(overhead));
+        let k = needed.map_or(1, usize::from);
+        return (shard * k).saturating_sub(threshold::TAG_BYTES);
     }
     let fits = |length: usize| {
         slice_lengths(length, weights)
@@ -212,9 +215,9 @@ mod tests {
         // Two photos of equal weight: each slice must fit its photo, so the smaller photo bounds it.
         let caps = [PART_HEADER + 100, PART_HEADER + 1000];
         assert_eq!(largest_encoded(&caps, &[1, 1], None), 201);
-        assert_eq!(
-            largest_encoded(&caps, &[1, 1], Some(2)),
-            100 - threshold::PAYLOAD_OVERHEAD
-        );
+        let shard = 100 - threshold::PAYLOAD_OVERHEAD;
+        let largest = largest_encoded(&caps, &[1, 1], Some(2));
+        assert_eq!(largest, 2 * shard - threshold::TAG_BYTES);
+        assert_eq!(threshold::shard_bytes(largest, 2), shard);
     }
 }
