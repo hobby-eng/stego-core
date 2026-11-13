@@ -15,6 +15,35 @@ use huffman::Huffman;
 pub(crate) use syntax::{COEFFICIENTS, Frame, ZIGZAG};
 use syntax::{Plan, Scan};
 
+/// Fewest coded bits a block can take: one Huffman code for DC and one for AC.
+const MIN_BLOCK_BITS: u128 = 2;
+/// What a browser module may plan to use: a 32-bit address space holds 4 GiB.
+#[cfg(target_arch = "wasm32")]
+const WASM_MEMORY: u64 = 3 << 30;
+/// Working bytes per site and per coefficient of a job, as measured (see `estimate`).
+const BYTES_PER_SITE: u64 = 40;
+const BYTES_PER_COEFFICIENT: u64 = 8;
+
+/// About how much memory a job on this photo takes, from its header alone: every AC coefficient
+/// of the full luminance blocks counted as a site (an upper bound), every coefficient of every
+/// component, the file three times and the default password stretch.
+pub(crate) fn estimate(frame: &Frame, file_bytes: usize) -> u64 {
+    let coefficients: u64 = frame
+        .components
+        .iter()
+        .map(|c| (c.stride * c.padded_rows * COEFFICIENTS) as u64)
+        .sum();
+    let (wide, high) = frame.full_blocks();
+    let sites = (wide * high * (COEFFICIENTS - 1)) as u64;
+    let stretch = u64::from(crate::WorkFactor::default().memory_kib()) * 1024;
+    sites * BYTES_PER_SITE + coefficients * BYTES_PER_COEFFICIENT + 3 * file_bytes as u64 + stretch
+}
+
+/// [`estimate`] for a file not yet admitted: the header is read, nothing is decoded.
+pub(crate) fn estimate_file(bytes: &[u8]) -> Result<u64, StegoError> {
+    Ok(estimate(&Plan::read(bytes)?.frame, bytes.len()))
+}
+
 /// Largest category of a DC difference in 8-bit baseline JPEG (T.81 F.1.2.1).
 const DC_CATEGORY_MAX: u8 = 11;
 /// Largest category of an AC coefficient in 8-bit baseline JPEG.
@@ -38,6 +67,22 @@ impl Jpeg {
         let plan = Plan::read(&bytes)?;
         if plan.end != bytes.len() {
             return Err(StegoError::TrailingData);
+        }
+        // Every block takes at least two bits of coded data (a DC code and an end or an AC code), so
+        // a header that claims more blocks than its scans can hold is refused before any plane is
+        // allocated: a few bytes cannot ask for gigabytes.
+        let coded_bits: u128 = plan.scans.iter().map(|s| s.entropy.len() as u128 * 8).sum();
+        let blocks: u128 = plan
+            .scans
+            .iter()
+            .map(|s| units(&plan.frame, s) as u128 * blocks_per_unit(&plan.frame, s) as u128)
+            .sum();
+        if blocks * MIN_BLOCK_BITS > coded_bits {
+            return Err(StegoError::Jpeg);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if estimate(&plan.frame, bytes.len()) > WASM_MEMORY {
+            return Err(StegoError::Memory);
         }
         // No size limit: a photo of any size is decoded when the system gives the memory, and a
         // refusal is an error, never an abort.
@@ -67,6 +112,11 @@ impl Jpeg {
             return Err(StegoError::NotReproducible);
         }
         Ok(jpeg)
+    }
+
+    /// The memory estimate of this photo.
+    pub(crate) fn estimate(&self) -> u64 {
+        estimate(&self.plan.frame, self.bytes.len())
     }
 
     pub(crate) const fn frame(&self) -> &Frame {
@@ -164,6 +214,17 @@ fn units(frame: &Frame, scan: &Scan) -> usize {
             c.columns * c.rows
         }
         _ => frame.mcu_columns * frame.mcu_rows,
+    }
+}
+
+/// Blocks in one coding unit of `scan`.
+fn blocks_per_unit(frame: &Frame, scan: &Scan) -> usize {
+    match scan.selectors.as_slice() {
+        [_] => 1,
+        many => many
+            .iter()
+            .map(|s| frame.components[s.component].h * frame.components[s.component].v)
+            .sum(),
     }
 }
 

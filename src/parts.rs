@@ -190,7 +190,8 @@ pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
         match threshold::join(&payloads, usize::from(count), &set) {
             threshold::Joined::Message(encoded) => encoded,
             threshold::Joined::Inconsistent => return Some(Assembly::Conflict),
-            threshold::Joined::Unreadable => return None,
+            // Enough authenticated parts that still do not open: report it, never "nothing".
+            threshold::Joined::Unreadable => return Some(Assembly::Conflict),
         }
     } else {
         let mut joined = Zeroizing::new(Vec::new());
@@ -262,5 +263,21 @@ mod tests {
                 needed: 2
             })
         ));
+    }
+
+    #[test]
+    fn two_different_parts_under_one_number_are_a_conflict() {
+        let content = Content::text("abandon ability able").unwrap();
+        let first = spread(&content, &[1, 1], None, &mut Counter(5)).unwrap();
+        let mut forged = first[1].to_vec();
+        if let Some(last) = forged.last_mut() {
+            *last ^= 1;
+        }
+        let read = vec![
+            Part::parse(&first[0]).unwrap(),
+            Part::parse(&first[1]).unwrap(),
+            Part::parse(&forged).unwrap(),
+        ];
+        assert!(matches!(assemble(read), Some(Assembly::Conflict)));
     }
 }

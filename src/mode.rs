@@ -144,6 +144,9 @@ pub struct Settings {
     /// `Some(k)` makes any `k` photos enough: every photo carries a Reed–Solomon shard of 1/k
     /// of the encrypted message and a Shamir share of its key.
     pub needed: Option<u8>,
+    /// Threads the host lets a job use; 1 runs it in the calling thread. The written files do
+    /// not depend on it. A browser module always uses one.
+    pub workers: usize,
 }
 
 impl Default for Settings {
@@ -155,6 +158,7 @@ impl Default for Settings {
             cost_model: CostModel::JUniward,
             site_rule: SiteRule::Frozen1,
             needed: None,
+            workers: 1,
         }
     }
 }

@@ -11,6 +11,8 @@ disallowed-methods = [
   { path = "std::time::Instant::now", reason = "the host owns the clock; it traps on wasm32-unknown-unknown" },
   { path = "std::time::SystemTime::now", reason = "the host owns the clock" },
   { path = "std::thread::spawn", reason = "the host owns threads" },
+  { path = "std::thread::scope", reason = "the host sets how many threads a job may use; only the trellis's parallel_map starts them" },
+  { path = "std::thread::Builder::spawn_scoped", reason = "the host sets how many threads a job may use; only the trellis's parallel_map starts them" },
   { path = "std::fs::read", reason = "the host reads files" },
   { path = "std::fs::write", reason = "the host writes files" },
 ]

@@ -4,8 +4,8 @@
 use crate::StegoError;
 use crate::algorithm::model::Costs;
 use crate::algorithm::stc::{
-    HEIGHT, SEGMENT_BITS, Ternary, binary_embed, column_prefix, columns, lsb, prefix_extract,
-    second_bit, ternary_embed_split,
+    HEIGHT, SEGMENT_BITS, Ternary, binary_embed_with, column_prefix, columns, lsb, prefix_extract,
+    second_bit, ternary_embed_split_with,
 };
 use crate::algorithm::wetpaper;
 use crate::random::{Random, next_u64};
@@ -65,14 +65,15 @@ pub(crate) fn write_ternary(
     costs: &Costs,
     message: &[u8],
     seed: u64,
+    workers: usize,
 ) -> Result<Ternary, StegoError> {
-    ternary_embed_split(
+    ternary_embed_split_with(
         &lane.values,
         costs,
         message,
         seed,
-        SEGMENT_BITS,
-        message.len() / 2,
+        (SEGMENT_BITS, message.len() / 2),
+        workers,
     )
     .map_err(|_| StegoError::Coding)
 }
@@ -130,6 +131,7 @@ pub(crate) fn write_binary(
     costs: &Costs,
     message: &[u8],
     seed: u64,
+    workers: usize,
 ) -> Result<BinaryWrite, StegoError> {
     let parities: Vec<u8> = lane.values.iter().map(|&v| lsb(v)).collect();
     let flips: Vec<f64> = costs
@@ -139,13 +141,14 @@ pub(crate) fn write_binary(
         .map(|(&p, &m)| flip_cost(p, m))
         .collect();
     let n = parities.len();
-    let chosen = binary_embed(
+    let chosen = binary_embed_with(
         &parities,
         &flips,
         message,
         &columns(n, HEIGHT, seed),
         HEIGHT,
         SEGMENT_BITS,
+        workers,
     )
     .map_err(|_| StegoError::Coding)?;
     let mut stego = lane.values.clone();

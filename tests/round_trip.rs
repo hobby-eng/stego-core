@@ -440,3 +440,29 @@ fn a_photo_given_twice_is_read_once_and_refused_for_writing() {
     let covers = reread(result.files(), &[0, 0, 1]);
     assert_eq!(read_text(&covers, &key).as_deref(), Some("only once"));
 }
+
+/// A JPEG whose header claims 65535 × 65535 pixels with one byte of coded data.
+fn claims_huge_size() -> Vec<u8> {
+    let mut file = vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x43, 0x00];
+    file.extend([1_u8; 64]);
+    file.extend([
+        0xFF, 0xC0, 0x00, 0x0B, 0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x01, 0x11, 0x00,
+    ]);
+    for class in [0x00, 0x10] {
+        file.extend([0xFF, 0xC4, 0x00, 0x14, class, 1]);
+        file.extend([0_u8; 15]);
+        file.push(0);
+    }
+    file.extend([
+        0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x00, 0xFF, 0xD9,
+    ]);
+    file
+}
+
+#[test]
+fn a_header_that_claims_more_blocks_than_its_data_holds_is_refused_at_once() {
+    let file = claims_huge_size();
+    // The header alone already tells a host the job would be enormous.
+    assert!(stego_core::memory_estimate(&file).unwrap() > 100 << 30);
+    assert_eq!(Cover::new(file).err(), Some(StegoError::Jpeg));
+}

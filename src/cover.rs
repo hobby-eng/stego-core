@@ -23,12 +23,6 @@ pub const RECOMMENDED_BPNZAC: f64 = 0.05;
 /// one site in nine bits at low rates, and about half of the changed sites can move both ways.
 pub(crate) const HIDDEN_SHARE: f64 = 0.05;
 const CONTEXT_LABEL: &[u8] = b"stego-core 1 photo";
-/// Working bytes a job keeps per site at its peak (costs, coder layers), measured on 12 and 48
-/// megapixel photos (0.46 and 1.77 GB) with some room to spare.
-const BYTES_PER_SITE: u64 = 40;
-/// Working bytes per luminance coefficient: the decoded plane, its copy for the cost model and
-/// the written plane.
-const BYTES_PER_COEFFICIENT: u64 = 8;
 /// The luminance table of T.81 table K.1 (natural order), the base of the quality estimate.
 const STANDARD_LUMA: [u16; COEFFICIENTS] = [
     16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56,
@@ -78,6 +72,17 @@ pub struct Capacity {
     /// after another, so a set needs its largest photo's figure. A host warns when the device
     /// has less free memory; nothing refuses a large photo.
     pub memory_bytes: u64,
+}
+
+/// About how much memory hiding in or reading the photo in `bytes` would take, from its header
+/// alone, so that a host can warn or decline before [`Cover::new`] decodes it. An upper bound:
+/// 12 MP about 0.8 GB, 48 MP about 2.9 GB (measured jobs took 0.46 and 1.77 GB).
+///
+/// # Errors
+///
+/// [`StegoError::Jpeg`] or [`StegoError::JpegProfile`] when the header cannot be read.
+pub fn memory_estimate(bytes: &[u8]) -> Result<u64, StegoError> {
+    crate::jpeg::estimate_file(bytes)
 }
 
 /// An admitted baseline JPEG photo.
@@ -156,16 +161,8 @@ impl Cover {
             max_bytes: text_bytes(max_bits),
             recommended_bytes: text_bytes(recommended_bits),
             hidden_bytes,
-            memory_bytes: self.memory_bytes(n),
+            memory_bytes: self.jpeg.estimate(),
         }
-    }
-
-    /// The memory estimate of [`Capacity::memory_bytes`] for `sites` sites.
-    fn memory_bytes(&self, sites: usize) -> u64 {
-        let coefficients = self.jpeg.luma().len() as u64;
-        let file = self.jpeg.bytes().len() as u64;
-        let stretch = u64::from(crate::WorkFactor::default().memory_kib()) * 1024;
-        sites as u64 * BYTES_PER_SITE + coefficients * BYTES_PER_COEFFICIENT + 3 * file + stretch
     }
 
     pub(crate) const fn jpeg(&self) -> &Jpeg {

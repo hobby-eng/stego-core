@@ -263,7 +263,13 @@ fn write_standard(
     drop(sites);
     let aad = associated(cover.context(), Layer::Standard.id(), rule.id(), body);
     let sealed = seal(plain, body, keys.cipher(), &aad, random)?;
-    let result = write_ternary(&lane, &costs, &to_bits(&sealed), keys.coder)?;
+    let result = write_ternary(
+        &lane,
+        &costs,
+        &to_bits(&sealed),
+        keys.coder,
+        settings.workers,
+    )?;
     let mut out = luma.to_vec();
     let changes = lane.apply(&result.stego, &mut out)?;
     Ok(Written {
@@ -334,7 +340,13 @@ fn write_decoy(
     drop(order);
     let aad = associated(cover.context(), Layer::Decoy.id(), rule.id(), body);
     let sealed = seal(pair.decoy_part, body, decoy_keys.cipher(), &aad, random)?;
-    let mut write = write_binary(&lane, &costs, &to_bits(&sealed), decoy_keys.coder)?;
+    let mut write = write_binary(
+        &lane,
+        &costs,
+        &to_bits(&sealed),
+        decoy_keys.coder,
+        settings.workers,
+    )?;
     let free = write.free.len();
     let header = crate::parts::PART_HEADER;
     let secret = match pair.behind {

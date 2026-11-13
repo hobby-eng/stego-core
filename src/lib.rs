@@ -40,7 +40,7 @@ mod sites;
 mod threshold;
 
 pub use content::{Content, FILE_NAME_MAX, Kind};
-pub use cover::{Capacity, Cover, PhotoInfo, RECOMMENDED_BPNZAC};
+pub use cover::{Capacity, Cover, PhotoInfo, RECOMMENDED_BPNZAC, memory_estimate};
 pub use error::StegoError;
 pub use fit::{Fit, Room, fit};
 pub use hide::{HideResult, Secret, hide};

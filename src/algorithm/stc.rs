@@ -65,6 +65,20 @@ pub fn binary_embed(
     height: usize,
     segment: usize,
 ) -> Result<Vec<u8>, StcError> {
+    binary_embed_with(cover, costs, message, columns, height, segment, 1)
+}
+
+/// [`binary_embed`] with the segments solved on up to `workers` threads, a number the host
+/// chooses (1 runs everything in the calling thread). The output does not depend on it.
+pub fn binary_embed_with(
+    cover: &[u8],
+    costs: &[f64],
+    message: &[u8],
+    columns: &[u32],
+    height: usize,
+    segment: usize,
+    workers: usize,
+) -> Result<Vec<u8>, StcError> {
     let (n, m) = (cover.len(), message.len());
     if cover.len() != costs.len()
         || columns.len() < n
@@ -103,7 +117,7 @@ pub fn binary_embed(
             height,
         )
     };
-    let chosen = run_segments(&jobs, &solve)?;
+    let chosen = run_segments(&jobs, &solve, workers)?;
     let mut stego = cover.to_vec();
     for ((span, _, _), part) in jobs.iter().zip(chosen) {
         stego[span.clone()].copy_from_slice(&part);
@@ -116,29 +130,46 @@ pub fn binary_embed(
 fn run_segments<J: Sync>(
     jobs: &[J],
     solve: &(dyn Fn(&J) -> Result<Vec<u8>, StcError> + Sync),
+    workers: usize,
 ) -> Result<Vec<Vec<u8>>, StcError> {
-    parallel_map(jobs, solve).into_iter().collect()
+    parallel_map(jobs, solve, workers).into_iter().collect()
 }
 
-/// `f` of every job, in the jobs' order, on every core where the platform has threads.
+/// `f` of every job, in the jobs' order, on up to `workers` threads the host allows. A thread
+/// the system refuses leaves its jobs to the calling thread, so a refusal only slows the work.
 #[cfg(not(target_arch = "wasm32"))]
-fn parallel_map<J: Sync, R: Send>(jobs: &[J], f: &(dyn Fn(&J) -> R + Sync)) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    if threads < 2 || jobs.len() < 2 {
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the one place that starts threads, as many as the host allows"
+)]
+fn parallel_map<J: Sync, R: Send>(
+    jobs: &[J],
+    f: &(dyn Fn(&J) -> R + Sync),
+    workers: usize,
+) -> Vec<R> {
+    if workers < 2 || jobs.len() < 2 {
         return jobs.iter().map(f).collect();
     }
-    let per = jobs.len().div_ceil(threads);
+    let per = jobs.len().div_ceil(workers.min(jobs.len()));
     std::thread::scope(|scope| {
-        let handles: Vec<_> = jobs
+        let spawned: Vec<_> = jobs
             .chunks(per)
-            .map(|chunk| scope.spawn(move || chunk.iter().map(f).collect::<Vec<R>>()))
+            .map(|chunk| {
+                let job = move || chunk.iter().map(f).collect::<Vec<R>>();
+                (
+                    chunk,
+                    std::thread::Builder::new().spawn_scoped(scope, job).ok(),
+                )
+            })
             .collect();
-        handles
+        spawned
             .into_iter()
-            // A panic in a worker is a defect of this module; it is passed on unchanged.
-            .flat_map(|h| {
-                h.join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            .flat_map(|(chunk, handle)| match handle {
+                // A panic in a worker is a defect of this module; it is passed on unchanged.
+                Some(h) => h
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                None => chunk.iter().map(f).collect(),
             })
             .collect()
     })
@@ -146,7 +177,11 @@ fn parallel_map<J: Sync, R: Send>(jobs: &[J], f: &(dyn Fn(&J) -> R + Sync)) -> V
 
 /// `f` of every job, one after another: a browser module has no threads.
 #[cfg(target_arch = "wasm32")]
-fn parallel_map<J: Sync, R: Send>(jobs: &[J], f: &(dyn Fn(&J) -> R + Sync)) -> Vec<R> {
+fn parallel_map<J: Sync, R: Send>(
+    jobs: &[J],
+    f: &(dyn Fn(&J) -> R + Sync),
+    _workers: usize,
+) -> Vec<R> {
     jobs.iter().map(f).collect()
 }
 
@@ -155,13 +190,15 @@ const SUM_CHUNK: usize = 1 << 16;
 
 /// `Σ part(i)` over `0..n`, summed per fixed chunk and then chunk by chunk in order: the same
 /// number however many cores run it.
-fn chunked_sum(n: usize, part: &(dyn Fn(usize) -> f64 + Sync)) -> f64 {
+fn chunked_sum(n: usize, part: &(dyn Fn(usize) -> f64 + Sync), workers: usize) -> f64 {
     let chunks: Vec<std::ops::Range<usize>> = (0..n.div_ceil(SUM_CHUNK))
         .map(|c| c * SUM_CHUNK..((c + 1) * SUM_CHUNK).min(n))
         .collect();
-    parallel_map(&chunks, &|range: &std::ops::Range<usize>| {
-        range.clone().map(part).sum::<f64>()
-    })
+    parallel_map(
+        &chunks,
+        &|range: &std::ops::Range<usize>| range.clone().map(part).sum::<f64>(),
+        workers,
+    )
     .iter()
     .sum()
 }
@@ -250,7 +287,7 @@ fn viterbi(
         return Err(StcError::Infeasible);
     }
     let mut out = vec![0_u8; len];
-    let mut decisions = vec![0_u64; CHECKPOINT * words];
+    let mut decisions = vec![0_u64; CHECKPOINT.min(len) * words];
     let mut back = bits.len();
     for (block, (saved, saved_bit)) in checkpoints.iter().enumerate().rev() {
         let start = block * CHECKPOINT;
@@ -296,7 +333,7 @@ pub fn binary_extract(
 ) -> Vec<u8> {
     let (n, mask) = (stego.len(), (1_usize << height) - 1);
     let segment = segment.max(1);
-    let mut message = Vec::with_capacity(length);
+    let mut message = Vec::with_capacity(length.min(n));
     let mut state = 0_usize;
     let mut start = 0;
     for k in 0..length.min(n) {
@@ -321,6 +358,8 @@ pub fn binary_extract(
 /// length that [`prefix_extract`] then reads.
 #[must_use]
 pub fn column_prefix(bits: &[u8], columns: &[u32], height: usize) -> Vec<u16> {
+    // Heights stop at 16 (the trellis refuses more), which a u16 prefix holds.
+    let height = height.clamp(1, 16);
     // Heights stop at 16, so a masked column fits `u16`.
     let mask = ((1_u32 << height) - 1) as u16;
     let mut prefix = Vec::with_capacity(bits.len() + 1);
@@ -340,6 +379,7 @@ pub fn column_prefix(bits: &[u8], columns: &[u32], height: usize) -> Vec<u16> {
 /// `O(length · height)` instead of a pass over every element; gives the same bits.
 #[must_use]
 pub fn prefix_extract(prefix: &[u16], length: usize, height: usize, segment: usize) -> Vec<u8> {
+    let height = height.clamp(1, 16);
     let n = prefix.len().saturating_sub(1);
     let segment = segment.max(1);
     let count = length.min(n);
@@ -488,9 +528,8 @@ pub fn ternary_embed(
             costs,
             second_costs.clone(),
             message,
-            first,
-            seed,
-            segment,
+            (first, seed, segment),
+            1,
         ) {
             Ok(mut result) => {
                 result.lambda = lambda;
@@ -514,6 +553,19 @@ pub fn ternary_embed_split(
     segment: usize,
     first: usize,
 ) -> Result<Ternary, StcError> {
+    ternary_embed_split_with(cover, costs, message, seed, (segment, first), 1)
+}
+
+/// [`ternary_embed_split`] on up to `workers` threads the host allows; `(segment, first)` as
+/// there. The output does not depend on the number of threads.
+pub fn ternary_embed_split_with(
+    cover: &[i32],
+    costs: &Costs,
+    message: &[u8],
+    seed: u64,
+    (segment, first): (usize, usize),
+    workers: usize,
+) -> Result<Ternary, StcError> {
     let n = cover.len();
     if costs.plus.len() != n
         || costs.minus.len() != n
@@ -527,13 +579,20 @@ pub fn ternary_embed_split(
     {
         return Err(StcError::Input);
     }
-    let lambda = solve_lambda(costs, message.len() as f64)?;
+    let lambda = solve_lambda_with(costs, message.len() as f64, workers)?;
     let second_costs: Vec<f64> = cover
         .iter()
         .zip(costs.plus.iter().zip(&costs.minus))
         .map(|(&x, (&p, &m))| element(x, p, m, lambda).second_cost)
         .collect();
-    let mut result = layered(cover, costs, second_costs, message, first, seed, segment)?;
+    let mut result = layered(
+        cover,
+        costs,
+        second_costs,
+        message,
+        (first, seed, segment),
+        workers,
+    )?;
     result.lambda = lambda;
     Ok(result)
 }
@@ -544,19 +603,19 @@ fn layered(
     costs: &Costs,
     second_costs: Vec<f64>,
     message: &[u8],
-    first: usize,
-    seed: u64,
-    segment: usize,
+    (first, seed, segment): (usize, u64, usize),
+    workers: usize,
 ) -> Result<Ternary, StcError> {
     let n = cover.len();
     let seconds: Vec<u8> = cover.iter().map(|&x| second_bit(x)).collect();
-    let chosen = binary_embed(
+    let chosen = binary_embed_with(
         &seconds,
         &second_costs,
         &message[..first],
         &columns(n, HEIGHT, seed ^ 2),
         HEIGHT,
         segment,
+        workers,
     )?;
     // The second-bit costs are done with; the parity layer's buffers take their place.
     drop(second_costs);
@@ -572,13 +631,14 @@ fn layered(
             away_cost(cover[i], costs.plus[i], costs.minus[i])
         });
     }
-    let parities_out = binary_embed(
+    let parities_out = binary_embed_with(
         &parities,
         &lsb_costs,
         &message[first..],
         &columns(n, HEIGHT, seed ^ 1),
         HEIGHT,
         segment,
+        workers,
     )?;
     let stego: Vec<i32> = (0..n)
         .map(|i| {
@@ -717,11 +777,18 @@ pub fn solve_lambda_near(
 
 /// Finds λ so that the optimal change distribution carries `bits` bits.
 pub fn solve_lambda(costs: &Costs, bits: f64) -> Result<f64, StcError> {
+    solve_lambda_with(costs, bits, 1)
+}
+
+/// [`solve_lambda`] with the sums on up to `workers` threads; the result does not depend on it.
+pub fn solve_lambda_with(costs: &Costs, bits: f64, workers: usize) -> Result<f64, StcError> {
     let n = costs.plus.len().min(costs.minus.len());
     let payload = |lambda: f64| -> f64 {
-        chunked_sum(n, &|i| {
-            entropy3(change_probabilities(lambda, costs.plus[i], costs.minus[i]))
-        })
+        chunked_sum(
+            n,
+            &|i| entropy3(change_probabilities(lambda, costs.plus[i], costs.minus[i])),
+            workers,
+        )
     };
     if payload(0.0) <= bits {
         return Err(StcError::Capacity);
