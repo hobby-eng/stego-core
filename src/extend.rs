@@ -49,7 +49,8 @@ pub struct Addition<'a> {
     pub password: &'a Password,
     /// With a decoy: the password of the secret behind it, so that the new photo gets its part
     /// of the secret too. Without it the new photo carries the decoy alone, as a decoy written
-    /// by itself does, and the secret stays in the photos that had it.
+    /// by itself does, and the secret stays in the photos that had it. The secret must sit in
+    /// photos of the decoy's own set: the password is tried on those and on no other.
     pub behind: Option<&'a Password>,
     /// The number the new photo takes.
     pub place: Place,
@@ -76,7 +77,8 @@ pub enum SetError {
     Conflict,
     /// What the password opened is not in a form this version reads.
     Unsupported,
-    /// Every number a set can have is taken.
+    /// [`Place::Next`] found no number after the highest count the photos declare: the numbers
+    /// of a set end at 16. A number below it may still be free; [`Place::Number`] names it.
     Full,
     /// The number asked for is not one a set can have.
     Number,
@@ -105,7 +107,9 @@ impl fmt::Display for SetError {
             }
             Self::Conflict => "the photos of the set do not agree with each other",
             Self::Unsupported => "the photos hold a set in a form this version does not read",
-            Self::Full => "the set already has its 16 photos",
+            Self::Full => {
+                "the set's numbers run to 16 and none is left after the last one issued; name a free number if there is one"
+            }
             Self::Number => "the photo's number must be from 1 to 16",
             Self::DecoyPassword => {
                 "this password opens a secret behind a decoy; give the decoy's password first and this one second"
@@ -134,17 +138,18 @@ impl From<NoQuorum> for SetError {
 pub struct Membership {
     /// The photo's number in the set, from 1.
     pub number: u16,
-    /// Whether that number had been issued before, as far as the photos given know. The new
-    /// photo then holds the same part as the photo that had the number, and the two count as
-    /// one.
-    pub replaces: bool,
+    /// Whether a photo with that number was among the photos given. The new photo then holds
+    /// the same part as that photo, and the two count as one. Whether a number that was not at
+    /// hand had ever been issued is not known here: no record of the photos issued exists
+    /// outside the photos, and `issued` is only the highest count they declare.
+    pub at_hand: bool,
     /// Photos the set needs.
     pub needed: usize,
     /// Different numbers of the set at hand after this: those of the photos given and the new
     /// one. Any `needed` of them open the message. What was issued elsewhere is not known here.
     pub numbers: usize,
-    /// How many numbers the set has issued, as far as the photos given know: the count the new
-    /// photo declares.
+    /// The highest count the photos given declare, or the new photo's number if that is higher:
+    /// the count the new photo declares.
     pub issued: u16,
 }
 
@@ -249,7 +254,7 @@ impl Source {
         let known = self.quorum.numbers().any(|(number, _)| number == index);
         let membership = Membership {
             number: index + 1,
-            replaces: known || index < self.quorum.issued(),
+            at_hand: known,
             needed: self.quorum.needed,
             numbers: self.quorum.numbers().count() + usize::from(!known),
             issued: count,
@@ -312,12 +317,21 @@ pub fn extend(
         return Err(StegoError::DuplicatePhoto);
     }
     let front = Source::read(photos, addition.password)?;
+    // A secret is behind this decoy only if it sits in photos of this very set, so the second
+    // password is tried on the set's own photos and on no other: every copy of every part,
+    // since of two copies of one decoy part only one may carry the secret's.
+    let members: Vec<&Cover> = front
+        .quorum
+        .members()
+        .iter()
+        .filter_map(|&place| photos.get(place).copied())
+        .collect();
     let behind = match (front.layer, addition.behind) {
         (Layer::Hidden, _) => return Err(SetError::DecoyPassword.into()),
         (Layer::Standard, Some(_)) => return Err(SetError::NothingBehind.into()),
         (Layer::Standard | Layer::Decoy, None) => None,
         (Layer::Decoy, Some(password)) => {
-            let source = match Source::read(photos, password) {
+            let source = match Source::read(&members, password) {
                 Err(StegoError::Set(SetError::Nothing)) => {
                     return Err(SetError::NothingBehind.into());
                 }
@@ -345,7 +359,7 @@ pub fn extend(
     let new = Cover::new(written.bytes.clone())?;
     front.verify(&new, photos, &front_place, addition.password)?;
     if let (Some((password, source)), Some((_, place))) = (&behind, &behind_part) {
-        source.verify(&new, photos, place, password)?;
+        source.verify(&new, &members, place, password)?;
     }
     let report = describe(
         addition,

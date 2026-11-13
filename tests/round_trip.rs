@@ -572,7 +572,7 @@ fn a_set_of_three_of_five_photos_grows_to_seven() {
     assert_eq!(
         (
             place.number,
-            place.replaces,
+            place.at_hand,
             place.needed,
             place.numbers,
             place.issued
@@ -580,7 +580,7 @@ fn a_set_of_three_of_five_photos_grows_to_seven() {
         (6, false, 3, 4, 6)
     );
     let (seventh, place) = added(&[&sixth, &old[4], &old[1]], 58, &key, Place::Next).unwrap();
-    assert_eq!((place.number, place.replaces, place.issued), (7, false, 7));
+    assert_eq!((place.number, place.at_hand, place.issued), (7, false, 7));
     // The five photos the set had are what they were.
     for (cover, bytes) in old.iter().zip(&before) {
         assert_eq!(cover.bytes(), bytes.as_slice());
@@ -618,10 +618,11 @@ fn a_lost_photo_is_replaced_and_additions_made_apart_are_one_piece() {
     let text = "two of three";
     let old = written(&[60, 61, 62], text, &key, Some(2));
     // Photo 2 is lost: a new photo takes its number, made from the other two.
+    // The lost photo was not at hand, so nothing here says the number had a photo before.
     let (again, place) = added(&[&old[0], &old[2]], 63, &key, Place::Number(2)).unwrap();
     assert_eq!(
-        (place.number, place.replaces, place.numbers, place.issued),
-        (2, true, 3, 3)
+        (place.number, place.at_hand, place.numbers, place.issued),
+        (2, false, 3, 3)
     );
     assert_eq!(
         read_text(&reread_pair(&again, &old[0]), &key).as_deref(),
@@ -708,10 +709,7 @@ fn a_set_is_given_no_photo_unless_the_photos_are_one_whole_set() {
     assert_eq!(error, StegoError::DuplicatePhoto);
     // The last number a set has, and then none is left.
     let (last, place) = added(&whole, 80, &key, Place::Number(16)).unwrap();
-    assert_eq!(
-        (place.number, place.replaces, place.issued),
-        (16, false, 16)
-    );
+    assert_eq!((place.number, place.at_hand, place.issued), (16, false, 16));
     assert_eq!(
         refused(&[&last, &set[0]], &key, Place::Next),
         StegoError::Set(SetError::Full)
@@ -807,5 +805,119 @@ fn a_set_with_a_decoy_grows_under_one_password_or_both() {
     assert_eq!(
         add(92, &decoy_key, Some(&decoy_key)).unwrap_err(),
         StegoError::Set(SetError::NothingBehind)
+    );
+}
+
+#[test]
+fn the_next_number_does_not_depend_on_the_order_of_the_photos() {
+    let key = password("correct horse battery");
+    let old = written(&[100, 101, 102], "two of three", &key, Some(2));
+    // Number 6 is issued by name, then number 1 is made again from photos that know of it:
+    // the new copy of number 1 declares six photos, the old copy three.
+    let (sixth, place) = added(&[&old[0], &old[1]], 103, &key, Place::Number(6)).unwrap();
+    assert_eq!((place.number, place.at_hand, place.issued), (6, false, 6));
+    let (again, place) = added(&[&sixth, &old[1], &old[0]], 104, &key, Place::Number(1)).unwrap();
+    assert_eq!((place.number, place.at_hand, place.issued), (1, true, 6));
+    // Both copies of number 1 and number 2, in either order: the same two parts, the same
+    // highest count, so the same next number.
+    for photos in [[&old[0], &again, &old[1]], [&again, &old[0], &old[1]]] {
+        let (_, place) = added(&photos, 105, &key, Place::Next).unwrap();
+        assert_eq!(
+            (place.number, place.at_hand, place.numbers, place.issued),
+            (7, false, 3, 7)
+        );
+    }
+    // A number passed over on the way up was never issued: at hand it is not, and the report
+    // claims nothing more.
+    let (_, place) = added(&[&old[0], &sixth], 106, &key, Place::Number(5)).unwrap();
+    assert_eq!((place.number, place.at_hand, place.issued), (5, false, 6));
+}
+
+/// Hides a secret behind a decoy in fresh 800 × 600 photos of `seeds`, any two of them enough.
+fn written_with_decoy(seeds: &[u64], names: [&str; 2], keys: [&Password; 2]) -> Vec<Cover> {
+    let covers: Vec<Cover> = seeds.iter().map(|&seed| photo(800, 600, seed)).collect();
+    let refs: Vec<&Cover> = covers.iter().collect();
+    let secret = Content::text(names[0]).unwrap();
+    let decoy = Content::text(&format!("{} ", names[1]).repeat(30)).unwrap();
+    let settings = Settings {
+        mode: Mode::Decoy,
+        needed: Some(2),
+        ..Settings::default()
+    };
+    let result = hide(
+        &refs,
+        &settings,
+        Secret {
+            content: &secret,
+            password: keys[0],
+        },
+        Some(Secret {
+            content: &decoy,
+            password: keys[1],
+        }),
+        &mut TestRandom(seeds[0]),
+    )
+    .unwrap();
+    reread(result.files(), &(0..seeds.len()).collect::<Vec<_>>())
+}
+
+#[test]
+fn a_secret_is_behind_a_decoy_only_in_photos_of_the_same_set() {
+    let (secret_a, decoy_a) = (password("secret password A"), password("decoy password AA"));
+    let (secret_b, decoy_b) = (password("secret password B"), password("decoy password BB"));
+    let a = written_with_decoy(
+        &[110, 111],
+        ["secret of A", "note of A"],
+        [&secret_a, &decoy_a],
+    );
+    let b = written_with_decoy(
+        &[112, 113],
+        ["secret of B", "note of B"],
+        [&secret_b, &decoy_b],
+    );
+    let add = |photos: &[&Cover], seed: u64, password: &Password, behind: Option<&Password>| {
+        let fresh = photo(800, 600, seed);
+        let addition = Addition {
+            photos,
+            photo: &fresh,
+            password,
+            behind,
+            place: Place::Next,
+        };
+        extend(&addition, &Settings::default(), &mut TestRandom(seed))
+    };
+    // The decoy of one set and the secret of another, all four photos given: the two sets
+    // share no photo, so that secret is not behind this decoy.
+    let all = [&a[0], &a[1], &b[0], &b[1]];
+    assert_eq!(
+        add(&all, 114, &decoy_a, Some(&secret_b)).unwrap_err(),
+        StegoError::Set(SetError::NothingBehind)
+    );
+    // Photo 1 of A made again with the decoy's password alone: the copy carries no secret.
+    let fresh = photo(800, 600, 115);
+    let addition = Addition {
+        photos: &[&a[0], &a[1]],
+        photo: &fresh,
+        password: &decoy_a,
+        behind: None,
+        place: Place::Number(1),
+    };
+    let copy = extend(&addition, &Settings::default(), &mut TestRandom(115)).unwrap();
+    assert!(copy.report().set.at_hand);
+    let copy = Cover::new(copy.into_file()).unwrap();
+    // The copy, the original and photo 2: one decoy set, and the secret is whole in the
+    // originals, so both grow, whichever copy of number 1 comes first.
+    for photos in [[&copy, &a[0], &a[1]], [&a[0], &copy, &a[1]]] {
+        let both = add(&photos, 116, &decoy_a, Some(&secret_a)).unwrap();
+        assert_eq!(both.report().set.number, 3);
+        assert_eq!(both.report().behind.map(|place| place.number), Some(3));
+    }
+    // The copy and photo 2 alone: the decoy is whole, the secret has one part of two.
+    assert_eq!(
+        add(&[&copy, &a[1]], 117, &decoy_a, Some(&secret_a)).unwrap_err(),
+        StegoError::Set(SetError::Incomplete {
+            found: 1,
+            needed: 2
+        })
     );
 }

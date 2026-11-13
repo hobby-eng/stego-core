@@ -241,6 +241,11 @@ impl From<Flawed> for Assembly {
 struct Checked {
     parts: Vec<Part>,
     needed: usize,
+    /// The largest count any part declares, the copies of one part included: two honest
+    /// copies of a part may declare different counts, one written before the set grew.
+    issued: u16,
+    /// The photos every part was read from, the copies of one part included.
+    members: Vec<usize>,
 }
 
 impl Checked {
@@ -254,6 +259,11 @@ impl Checked {
 
 /// Checks the parts of one set, sorted by number, before anything is made of them.
 fn check(mut set: Vec<Part>) -> Result<Checked, Flawed> {
+    // What every copy says is taken before the copies are dropped, so that the answer does not
+    // depend on the order the photos were given in.
+    let members: Vec<usize> = set.iter().map(|p| p.source).collect();
+    let issued = set.iter().map(|p| p.count).max().unwrap_or(0);
+    let fewest = set.iter().map(|p| p.count).min().unwrap_or(0);
     // The same part read twice (the same photo under two names) counts once; two different
     // parts under one number are a conflict, never a silent choice.
     let mut conflict = false;
@@ -268,7 +278,12 @@ fn check(mut set: Vec<Part>) -> Result<Checked, Flawed> {
     }
     if first.scheme != THRESHOLD {
         let needed = usize::from(first.count);
-        return Ok(Checked { parts: set, needed });
+        return Ok(Checked {
+            parts: set,
+            needed,
+            issued,
+            members,
+        });
     }
     // What a k-of-n set needs is in its payloads, which are checked before they are believed.
     let payloads: Vec<(usize, &[u8])> = set
@@ -281,10 +296,15 @@ fn check(mut set: Vec<Part>) -> Result<Checked, Flawed> {
         threshold::Form::Malformed => return Err(Flawed::Unsupported),
     };
     // No writer issues fewer photos than the set needs.
-    if set.iter().any(|p| usize::from(p.count) < needed) {
+    if usize::from(fewest) < needed {
         return Err(Flawed::Unsupported);
     }
-    Ok(Checked { parts: set, needed })
+    Ok(Checked {
+        parts: set,
+        needed,
+        issued,
+        members,
+    })
 }
 
 /// The encoded message of a checked set.
@@ -345,6 +365,8 @@ pub(crate) enum NoQuorum {
 pub(crate) struct Quorum {
     set: [u8; SET_BYTES],
     parts: Vec<Part>,
+    issued: u16,
+    members: Vec<usize>,
     /// Photos the set needs.
     pub needed: usize,
     /// The message the set opens to.
@@ -352,14 +374,16 @@ pub(crate) struct Quorum {
 }
 
 impl Quorum {
-    /// The numbers below this were issued, as far as the parts at hand know: the largest count
-    /// one of them declares, or one past the highest number among them.
-    pub(crate) fn issued(&self) -> u16 {
-        self.parts
-            .iter()
-            .map(|p| p.count.max(p.index + 1))
-            .max()
-            .unwrap_or(0)
+    /// The numbers below this were issued, as far as the photos at hand know: the largest count
+    /// any of them declares, whichever order they were given in.
+    pub(crate) const fn issued(&self) -> u16 {
+        self.issued
+    }
+
+    /// The photos that hold a part of this set, by their places among the photos given: every
+    /// copy of a part, since two copies of one part may differ in what else they carry.
+    pub(crate) fn members(&self) -> &[usize] {
+        &self.members
     }
 
     /// Each part's number and the photo it was read from, in the order of the numbers.
@@ -407,6 +431,8 @@ pub(crate) fn quorum(parts: Vec<Part>) -> Result<Quorum, NoQuorum> {
     Ok(Quorum {
         set: identity,
         needed: checked.needed,
+        issued: checked.issued,
+        members: checked.members,
         parts: checked.parts,
         content,
     })
@@ -512,6 +538,34 @@ mod tests {
         unknown[PART_HEADER] = 0xff;
         let read = vec![Part::parse(&unknown).unwrap()];
         assert!(matches!(outcome(read), Some(Assembly::Unsupported)));
+    }
+
+    #[test]
+    fn the_highest_count_is_taken_from_every_copy_in_any_order() {
+        let content = Content::text("abandon ability able").unwrap();
+        let parts = spread(&content, &[1, 1, 1], Some(2), &mut Counter(17)).unwrap();
+        // Photo 0 as first written, declaring three photos, and a copy made after the set grew,
+        // declaring six: the same part, read from two photos.
+        let mut later = parts[0].to_vec();
+        later[SET_BYTES + 3..SET_BYTES + 5].copy_from_slice(&6_u16.to_be_bytes());
+        for order in [[0, 1, 2], [1, 0, 2], [2, 1, 0]] {
+            let read: Vec<Part> = order
+                .iter()
+                .map(|&which| match which {
+                    0 => Part::parse(&parts[0]).unwrap().at(0),
+                    1 => Part::parse(&later).unwrap().at(1),
+                    _ => Part::parse(&parts[1]).unwrap().at(2),
+                })
+                .collect();
+            let Ok(set) = quorum(read) else {
+                panic!("{order:?} is no quorum");
+            };
+            assert_eq!(set.issued(), 6, "{order:?}");
+            assert_eq!(set.numbers().count(), 2);
+            let mut members = set.members().to_vec();
+            members.sort_unstable();
+            assert_eq!(members, [0, 1, 2]);
+        }
     }
 
     #[test]
