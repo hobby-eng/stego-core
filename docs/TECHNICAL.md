@@ -62,7 +62,7 @@ The model matters only to the writer; the reader never needs it, so the default 
 - passes `t = 3 × (PIM + 1)`, PIM from 0 to 1,023;
 - memory `m = (2 + MEM mod 2) × 2^(16 + ⌊MEM / 2⌋)` KiB, MEM from 0 to 29: 128, 192, 256, 384, 512, 768 MiB, 1 GiB, … 3 TiB.
 
-The series is MHFE's started lower: level 8 here is MHFE's level 0 (2 GiB). Neither number is stored; the reader enters them.
+Neither number is stored; the reader enters them. Level 0 opens on phones and in browsers; a browser cannot go past about 2 GiB (level 8).
 
 **Key separation.** HKDF-SHA-256 derives, for each layer and site rule, the key of the site order, the seed of the coder's matrix and the record cipher's key.
 
@@ -100,8 +100,6 @@ Every photo carries one piece, one key share and the set's identifier, inside it
 The recommended room is the largest message at 0.05 bits per non-zero AC coefficient, a provisional rate until the detectability measurements set it; the maximum is the coder's limit of 0.5 bits per site. `fit` answers, for the photos and messages chosen, how many bytes are left or missing at both limits, by the same rules writing uses.
 
 ## Protection
-
-`protect.rs` and `os/` are copies of MHFE's (mhfe_core); a change goes to both.
 
 - **Memory.** Every password, message and key lives in a `Secret`: whole pages of its own. On Linux they are secret memory (`memfd_secret`), which no process reads through `/proc` or `ptrace`, never swapped or dumped, and which blocks hibernation. Elsewhere they are locked pages advised out of core dumps. All are wiped when dropped. Argon2id's work area is pages of its own as well, wiped after each stretch.
 - **Isolation** (`Isolation::enter`, for the host program): no core dumps; no reading of the process's memory by other programs; no new sockets or io_uring (seccomp); no file writes (seccomp and Landlock on Linux, a sandbox on macOS, low integrity on Windows); an empty network namespace on Linux. Each protection is read back and reported, never assumed.

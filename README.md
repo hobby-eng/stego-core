@@ -38,11 +38,11 @@ Both ways work in the decoy mode too, for the decoy and the secret alike.
 
 ## Passwords
 
-Each password is stretched with Argon2id. As in MHFE, the person may raise two numbers: the **PIM** multiplies the passes (3 × (PIM + 1)), and the **memory level** chooses the memory from 128 MiB upward (128, 192, 256, 384, 512, 768 MiB, 1 GiB, and so on). Neither number is stored in the photo: whoever reads must enter the same ones. Level 0 with PIM 0 is the default, and phones and browsers can open it; a browser cannot go above about 2 GiB (level 8).
+Each password is stretched with Argon2id. The person may raise two numbers: the **PIM** multiplies the passes (3 × (PIM + 1)), and the **memory level** chooses the memory from 128 MiB upward (128, 192, 256, 384, 512, 768 MiB, 1 GiB, and so on). Neither number is stored in the photo: whoever reads must enter the same ones. Level 0 with PIM 0 is the default, and phones and browsers can open it; a browser cannot go above about 2 GiB (level 8).
 
 ## Protection while it runs
 
-The protection code is MHFE's. Passwords, messages and keys live in pages of their own, locked against swap or in Linux's secret memory, kept out of core dumps and wiped when dropped. A host program can isolate its process: no core dumps, no memory reading by other programs, no new network connections and no file writes. See [How it works](docs/TECHNICAL.md#protection).
+Passwords, messages and keys live in pages of their own, locked against swap or in Linux's secret memory, kept out of core dumps and wiped when dropped. A host program can isolate its process: no core dumps, no memory reading by other programs, no new network connections and no file writes. See [How it works](docs/TECHNICAL.md#protection).
 
 ## Limits
 
