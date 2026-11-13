@@ -57,12 +57,18 @@ impl Content {
     }
 
     fn new(kind: Kind, name: String, bytes: &[u8]) -> Result<Self, StegoError> {
+        // Wiped when the content is refused: a file's name can say as much as its contents.
+        let mut name = Zeroizing::new(name);
         if bytes.is_empty() {
             return Err(StegoError::MessageEmpty);
         }
         let mut data = Secret::with_capacity(bytes.len());
         data.push(bytes)?;
-        Ok(Self { kind, name, data })
+        Ok(Self {
+            kind,
+            name: std::mem::take(&mut *name),
+            data,
+        })
     }
 
     /// Text or file.
