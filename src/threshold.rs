@@ -1,17 +1,16 @@
 //! Any k of n photos (Krawczyk, "Secret sharing made short", CRYPTO 1993): the message is
 //! encrypted once with a random key; the ciphertext is cut into n Reed–Solomon shards of which
-//! any k rebuild it, so each photo carries about 1/k of it; the key is shared with SSKR
-//! (Shamir), so fewer than k photos say nothing about it.
+//! any k rebuild it, so each photo carries about 1/k of it; the key is shared with Shamir's scheme
+//! over GF(256) (vsss-rs, constant time), so fewer than k photos say nothing about it.
 
 use crate::StegoError;
 use crate::random::Random;
 use crate::shard::Code;
-use bc_rand::RandomNumberGenerator;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{Tag, XChaCha20Poly1305, XNonce};
 use rand_chacha::ChaCha20Rng;
-use rand_core::{CryptoRng, RngCore, SeedableRng};
-use sskr::{GroupSpec, Secret, Spec, sskr_combine, sskr_generate_using};
+use rand_chacha::rand_core::SeedableRng;
+use vsss_rs::Gf256;
 use zeroize::{Zeroize, Zeroizing};
 
 const KEY_BYTES: usize = 32;
@@ -19,44 +18,18 @@ const NONCE_BYTES: usize = 24;
 pub(crate) const TAG_BYTES: usize = 16;
 const LENGTH_BYTES: usize = 4;
 const AAD_LABEL: &[u8] = b"stego-core 1 threshold";
-/// Bytes of an SSKR share of a 32-byte key: five bytes of metadata and the share value.
-const SHARE_BYTES: usize = 5 + KEY_BYTES;
+/// Bytes of a share of a 32-byte key: the share's number and the value.
+const SHARE_BYTES: usize = 1 + KEY_BYTES;
 /// Bytes a threshold payload adds to its shard: the threshold, the share's length, the share,
 /// the nonce and the ciphertext's length.
 pub(crate) const PAYLOAD_OVERHEAD: usize = 1 + 2 + SHARE_BYTES + NONCE_BYTES + LENGTH_BYTES;
-/// Most photos of a threshold set: SSKR's limit of members in a group.
+/// Most photos of a threshold set: kept at 16 so that every choice of pieces can be tested.
 pub const THRESHOLD_MAX: usize = 16;
 
 /// Bytes of each shard of an encoded message of `length` bytes split for `needed` photos.
 #[cfg(test)]
 pub(crate) const fn shard_bytes(length: usize, needed: usize) -> usize {
     (length + TAG_BYTES).div_ceil(needed)
-}
-
-/// The split's generator, seeded with the host's fresh randomness and reset when dropped.
-struct Seeded(ChaCha20Rng);
-
-impl RngCore for Seeded {
-    fn next_u32(&mut self) -> u32 {
-        self.0.next_u32()
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0.next_u64()
-    }
-
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        self.0.fill_bytes(destination);
-    }
-}
-
-impl CryptoRng for Seeded {}
-impl RandomNumberGenerator for Seeded {}
-
-impl Drop for Seeded {
-    fn drop(&mut self) {
-        self.0 = ChaCha20Rng::from_seed([0; KEY_BYTES]);
-    }
 }
 
 /// The payloads of a k-of-n set, photo `i` getting shard `i`: the threshold, the share's
@@ -125,7 +98,8 @@ fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Vec<u8>>, StegoEr
         .collect()
 }
 
-/// One SSKR share of `key` per photo, any `needed` of which restore it.
+/// One share of `key` per photo, any `needed` of which restore it. The polynomial's
+/// coefficients come from a generator seeded with the host's fresh randomness.
 fn shares(
     key: &[u8; KEY_BYTES],
     needed: u8,
@@ -134,19 +108,15 @@ fn shares(
 ) -> Result<Vec<Zeroizing<Vec<u8>>>, StegoError> {
     let mut seed = Zeroizing::new([0; KEY_BYTES]);
     random.fill(seed.as_mut())?;
-    let mut generator = Seeded(ChaCha20Rng::from_seed(*seed));
-    let group = GroupSpec::new(usize::from(needed), count).map_err(|_| StegoError::Threshold)?;
-    let spec = Spec::new(1, vec![group]).map_err(|_| StegoError::Threshold)?;
-    let secret = Secret::new(key).map_err(|_| StegoError::Crypto)?;
-    let mut groups =
-        sskr_generate_using(&spec, &secret, &mut generator).map_err(|_| StegoError::Crypto)?;
-    let shares = groups
-        .iter()
-        .flatten()
-        .map(|s| Zeroizing::new(s.clone()))
-        .collect();
-    groups.iter_mut().flatten().for_each(Zeroize::zeroize);
-    Ok(shares)
+    let mut generator = ChaCha20Rng::from_seed(*seed);
+    let mut shares = Gf256::split_bytes(usize::from(needed), count, key, &mut generator)
+        .map_err(|_| StegoError::Threshold)?;
+    let out = shares.iter().map(|s| Zeroizing::new(s.clone())).collect();
+    shares.iter_mut().for_each(Zeroize::zeroize);
+    // The generator's state could make the coefficients again: it is wiped too.
+    generator = ChaCha20Rng::from_seed([0; KEY_BYTES]);
+    drop(generator);
+    Ok(out)
 }
 
 /// The number of photos a payload says its set needs.
@@ -217,11 +187,9 @@ fn join_checked(payloads: &[(usize, &[u8])], count: usize, set: &[u8]) -> Option
     // Wiped on every return, early ones included.
     let shares: Zeroizing<Vec<Vec<u8>>> =
         Zeroizing::new(parsed.iter().map(|(_, f)| f.share.to_vec()).collect());
-    // Accepted: sskr 0.12's Secret has no wipe, so the restored key's copy inside it is freed
-    // unwiped; it lives only for this call.
-    let key = sskr_combine(&shares).ok()?;
+    let key = Zeroizing::new(Gf256::combine_bytes(&*shares).ok()?);
     let mut plain = Zeroizing::new(sealed[..body_length].to_vec());
-    let cipher = XChaCha20Poly1305::new_from_slice(key.data()).ok()?;
+    let cipher = XChaCha20Poly1305::new_from_slice(&key).ok()?;
     cipher
         .decrypt_inout_detached(&nonce, &aad(set), plain.as_mut_slice().into(), &tag)
         .ok()?;

@@ -2,16 +2,16 @@
 
 Runtime dependencies, pinned exactly in `Cargo.toml`:
 
-| Crate                    | Why                                                                 | License             |
-| ------------------------ | ------------------------------------------------------------------- | ------------------- |
-| argon2                   | Password stretching (Argon2id, RFC 9106)                            | MIT OR Apache-2.0   |
-| chacha20                 | Keyed order of the sites                                            | MIT OR Apache-2.0   |
-| chacha20poly1305         | Record and threshold-set encryption                                 | MIT OR Apache-2.0   |
-| hkdf, sha2               | Key separation and hashes                                           | MIT OR Apache-2.0   |
-| sskr, bc-shamir, bc-rand | Shamir sharing of the key of a k-of-n set (Blockchain Commons SSKR) | BSD-2-Clause-Patent |
-| rand_chacha, rand_core   | The SSKR generator, seeded from the host's random source            | MIT OR Apache-2.0   |
-| unicode-normalization    | NFKD of passwords                                                   | MIT OR Apache-2.0   |
-| zeroize                  | Wiping secrets                                                      | MIT OR Apache-2.0   |
+| Crate                 | Why                                                                            | License           |
+| --------------------- | ------------------------------------------------------------------------------ | ----------------- |
+| argon2                | Password stretching (Argon2id, RFC 9106)                                       | MIT OR Apache-2.0 |
+| chacha20              | Keyed order of the sites                                                       | MIT OR Apache-2.0 |
+| chacha20poly1305      | Record and threshold-set encryption                                            | MIT OR Apache-2.0 |
+| hkdf, sha2            | Key separation and hashes                                                      | MIT OR Apache-2.0 |
+| vsss-rs               | Shamir's sharing of the key of a k-of-n set over GF(256), constant time, wiped | Apache-2.0 OR MIT |
+| rand_chacha           | The share generator, seeded from the host's random source                      | MIT OR Apache-2.0 |
+| unicode-normalization | NFKD of passwords                                                              | MIT OR Apache-2.0 |
+| zeroize               | Wiping secrets                                                                 | MIT OR Apache-2.0 |
 
 Development dependencies: jpeg-encoder (synthetic test photos), (MIT OR Apache-2.0) AND IJG; reed-solomon-erasure (an independent Reed–Solomon implementation whose parity the shard tests expect), MIT. The Reed–Solomon codec itself is this crate's own.
 

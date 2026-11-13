@@ -120,7 +120,7 @@ A large message is cut into slices in proportion to each photo's room, so every 
 
 Four ideas are combined:
 
-- **Shamir's secret sharing** (1979). A secret is the constant term of a random polynomial of degree k − 1; each share is one point on it. Any k points determine the polynomial and the secret; k − 1 points leave every secret equally likely. Each share is as long as the secret. stego-core shares only a 32-byte key, through Blockchain Commons' SSKR.
+- **Shamir's secret sharing** (1979). A secret is the constant term of a random polynomial of degree k − 1; each share is one point on it. Any k points determine the polynomial and the secret; k − 1 points leave every secret equally likely. Each share is as long as the secret. stego-core shares only a 32-byte key, over GF(256) with the constant-time vsss-rs.
 - **Reed–Solomon codes** (1960). Data of k pieces is extended to n pieces, the values of a polynomial at n points over GF(2^8), so that any k pieces rebuild all of it. They are what CDs, QR codes and RAID 6 use against losses.
 - **Rabin's information dispersal** (1989). Using such a code, a file is split into n pieces of size 1/k each, any k of which rebuild it. It saves space but does not hide anything: k − 1 pieces still show parts of the data.
 - **Krawczyk's "secret sharing made short"** (1993) joins them. The message is encrypted once with a random key; the ciphertext is dispersed with Reed–Solomon into n pieces of about 1/k each; the key is split with Shamir. Any k photos give k pieces and k key shares, enough to rebuild and open the ciphertext. Fewer than k photos give no key, so their pieces are ciphertext only. The space is close to Rabin's; the secrecy rests on the cipher.
@@ -129,7 +129,7 @@ The Reed–Solomon codec is stego-core's own: GF(2^8) with the polynomial x^8 + 
 
 Reading checks a set strictly: the same file given twice counts once; two different pieces under one number, or more than k pieces that do not agree with each other, are reported as a conflict instead of being chosen between; too few pieces are reported with how many were found and how many are needed. Writing refuses the same photo twice, since two records in copies of one photo would show their changes when the copies are compared.
 
-Every photo carries one piece, one key share and the set's identifier, inside its own password-encrypted record. Sets have up to 16 photos, SSKR's limit; the pieces are of equal size, so the smallest photo bounds the room.
+Every photo carries one piece, one key share and the set's identifier, inside its own password-encrypted record. Sets have up to 16 photos; the pieces are of equal size, so the smallest photo bounds the room.
 
 ## Room
 

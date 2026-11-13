@@ -33,7 +33,7 @@ The [documentation index](docs/README.md) lists the guides; [How it works](docs/
 A message can be spread over up to 256 photos in two ways:
 
 - **All photos needed.** A large message is cut into parts in proportion to each photo's room. Reading needs every photo, in any order: each part knows its place. No secret sharing is involved.
-- **Any k of n photos.** The message is encrypted once with a random key. Its ciphertext is cut into n Reed–Solomon pieces, any k of which rebuild it (Rabin's information dispersal), so each photo carries about 1/k of it. The key is split with Shamir's secret sharing (SSKR), so fewer than k photos say nothing about it. Together these form Krawczyk's "secret sharing made short". Up to 16 photos.
+- **Any k of n photos.** The message is encrypted once with a random key. Its ciphertext is cut into n Reed–Solomon pieces, any k of which rebuild it (Rabin's information dispersal), so each photo carries about 1/k of it. The key is split with Shamir's secret sharing, so fewer than k photos say nothing about it. Together these form Krawczyk's "secret sharing made short". Up to 16 photos.
 
 Both ways work in the decoy mode too, for the decoy and the secret alike.
 
