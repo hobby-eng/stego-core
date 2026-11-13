@@ -142,7 +142,7 @@ pub struct Settings {
     pub site_rule: SiteRule,
     /// With several photos: `None` splits each message so that every photo is needed;
     /// `Some(k)` makes any `k` photos enough: every photo carries a Reed–Solomon shard of 1/k
-    /// of the encrypted message and a Shamir (SSKR) share of its key.
+    /// of the encrypted message and a Shamir share of its key.
     pub needed: Option<u8>,
 }
 

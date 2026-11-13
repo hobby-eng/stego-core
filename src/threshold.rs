@@ -69,7 +69,7 @@ pub(crate) fn split(
         .map(|(share, shard)| {
             let mut payload = Zeroizing::new(Vec::with_capacity(PAYLOAD_OVERHEAD + shard.len()));
             payload.push(needed);
-            // SSKR shares of a 32-byte key are 37 bytes.
+            // A share of a 32-byte key is 33 bytes.
             payload.extend_from_slice(&(share.len() as u16).to_be_bytes());
             payload.extend_from_slice(share);
             payload.extend_from_slice(&nonce);

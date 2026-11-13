@@ -56,7 +56,7 @@ pub fn startup_self_test() -> SelfTest {
         ("Argon2id: RFC 9106 5.3", argon2id),
         ("Reed–Solomon: 01 02 03 04 gives parity 45 5E", reed_solomon),
         (
-            "Shamir (SSKR) and dispersal: 2 of 3 open, 1 does not (round trip)",
+            "Shamir and dispersal: 2 of 3 open, 1 does not (round trip)",
             threshold,
         ),
         (

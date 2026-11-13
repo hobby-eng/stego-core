@@ -153,4 +153,4 @@ The recommended room is the largest message at 0.05 bits per non-zero AC coeffic
 - I. S. Reed, G. Solomon, "Polynomial codes over certain finite fields", J. SIAM 8(2), 1960.
 - M. O. Rabin, "Efficient dispersal of information for security, load balancing, and fault tolerance", J. ACM 36(2), 1989.
 - H. Krawczyk, "Secret sharing made short", CRYPTO 1993.
-- RFC 9106, Argon2; RFC 5869, HKDF; Blockchain Commons, SSKR.
+- RFC 9106, Argon2; RFC 5869, HKDF.
