@@ -239,6 +239,19 @@ const fn record(layer: Layer, site_rule: SiteRule, body: usize, part_bytes: usiz
     }
 }
 
+/// `cover` with `plain` as its record under `password`, written as the standard mode writes it:
+/// for tests of what a reader makes of a record this version would not write.
+#[cfg(test)]
+pub(crate) fn write_plain(
+    cover: &Cover,
+    password: &crate::Password,
+    plain: &[u8],
+    random: &mut dyn Random,
+) -> Result<Vec<u8>, StegoError> {
+    let keys = Keys::derive(password, cover.context())?;
+    write_standard(cover, &keys, &Settings::default(), plain, random).map(|written| written.bytes)
+}
+
 fn write_standard(
     cover: &Cover,
     keys: &Keys,

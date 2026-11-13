@@ -127,8 +127,12 @@ pub struct HideReport {
 /// The result of a reading job.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadReport {
-    /// For every photo that opened: its index among the photos given, its facts and record.
+    /// For every photo of the set that was read: its index among the photos given, its facts
+    /// and record.
     pub files: Vec<(usize, PhotoInfo, RecordReport)>,
+    /// What else the password opened among the photos: other sets, whole or not, and records of
+    /// another version. Their photos are not in `files`; read them apart to see them.
+    pub other_sets: usize,
     /// Size of the message in bytes.
     pub content_bytes: usize,
     /// SHA-256 of the message.

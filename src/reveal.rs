@@ -9,14 +9,21 @@ use crate::coding::{
 use crate::content::Content;
 use crate::cover::{Cover, MAX_BITS_PER_SITE};
 use crate::keys::Keys;
-use crate::parts::{Assembly, CARRIERS_MAX, Part, assemble};
+use crate::parts::{Assembled, Assembly, CARRIERS_MAX, Part, assemble};
 use crate::record::{associated, bodies, from_bits, open, record_bits};
 use crate::report::{Digest, Layer, ReadReport, RecordReport, parameters};
 use crate::sites::{SiteRule, Sites};
 use crate::{Password, StegoError};
 use zeroize::Zeroizing;
 
-/// What a password opened in a set of photos.
+/// What a password opened in the photos given.
+///
+/// The photos may hold more than one set under the same password. Every set is judged on its
+/// own and one is answered for: a whole message if any set gives one, taking the set with the
+/// most photos and, among equals, the one whose first photo was given first; otherwise the
+/// state of the set with the most photos. [`ReadReport::other_sets`] counts what else the
+/// password opened, and [`ReadReport::files`] names the photos of the set that was read, so a
+/// host can ask for the others to be read apart.
 #[derive(Debug)]
 pub enum Reading {
     /// No photo opened. A photo without any record gives the same answer.
@@ -33,6 +40,9 @@ pub enum Reading {
     /// Two photos carry different parts under one number, or the parts do not agree: photos of
     /// two different sets were mixed, or one was altered.
     Conflict,
+    /// The password opened a record, so it is right, but what the record holds is not in a form
+    /// this version reads: another version of the program wrote it.
+    Unsupported,
 }
 
 /// A message that opened, with its technical report.
@@ -74,6 +84,9 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
     }
     let mut parts = Vec::new();
     let mut files = Vec::new();
+    // Records that opened without a part this version knows: the tag vouches for them, so they
+    // are another version's and never passed over as if nothing had opened.
+    let mut unknown = 0;
     let mut seen: Vec<&[u8; 32]> = Vec::with_capacity(covers.len());
     for (index, cover) in covers.iter().enumerate() {
         // The same file given twice (from two folders, say) is read once.
@@ -85,6 +98,7 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
             continue;
         };
         let Some(part) = Part::parse(&found.plain) else {
+            unknown += 1;
             continue;
         };
         files.push((
@@ -102,15 +116,29 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
                 kdf_passes: password.work().passes(),
             },
         ));
-        parts.push(part);
+        parts.push(part.at(index));
     }
-    Ok(match assemble(parts) {
-        None => Reading::Nothing,
-        Some(Assembly::Incomplete { found, needed }) => Reading::Incomplete { found, needed },
-        Some(Assembly::Conflict) => Reading::Conflict,
-        Some(Assembly::Complete(content)) => {
+    let Some(Assembled {
+        outcome,
+        sources,
+        others,
+    }) = assemble(parts)
+    else {
+        return Ok(if unknown > 0 {
+            Reading::Unsupported
+        } else {
+            Reading::Nothing
+        });
+    };
+    Ok(match outcome {
+        Assembly::Incomplete { found, needed } => Reading::Incomplete { found, needed },
+        Assembly::Conflict => Reading::Conflict,
+        Assembly::Unsupported => Reading::Unsupported,
+        Assembly::Complete(content) => {
+            files.retain(|(index, ..)| sources.contains(index));
             let report = ReadReport {
                 files,
+                other_sets: others + unknown,
                 content_bytes: content.bytes().len(),
                 sha256: Digest::new(content.sha256()),
                 parameters: parameters(),
@@ -219,4 +247,30 @@ fn hidden(cover: &Cover, keys: &Keys) -> Result<Option<Found>, StegoError> {
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::record::tests::Counter;
+
+    #[test]
+    fn a_record_of_another_version_is_unsupported_and_never_nothing() {
+        let cover = Cover::new(crate::self_test::sample_photo()).unwrap();
+        let password = Password::new("public-test-password").unwrap();
+        // A part header with a scheme this version does not know, then some body: the tag opens,
+        // so the password is right, and the record is another version's.
+        let mut plain = vec![7; 16];
+        plain.extend([9, 0, 0, 0, 1]);
+        plain.extend(b"from another version");
+        let file = crate::hide::write_plain(&cover, &password, &plain, &mut Counter(21)).unwrap();
+        let written = Cover::new(file).unwrap();
+        assert!(matches!(
+            reveal(&[&written], &password),
+            Ok(Reading::Unsupported)
+        ));
+        // A wrong password learns nothing, not even that a record is there.
+        let other = Password::new("another public password").unwrap();
+        assert!(matches!(reveal(&[&written], &other), Ok(Reading::Nothing)));
+    }
 }

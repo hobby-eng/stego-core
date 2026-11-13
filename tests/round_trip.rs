@@ -475,3 +475,45 @@ fn a_header_that_claims_more_blocks_than_its_data_holds_is_refused_at_once() {
     assert!(stego_core::memory_estimate(&file).unwrap() > 100 << 30);
     assert_eq!(Cover::new(file).err(), Some(StegoError::Jpeg));
 }
+
+#[test]
+fn of_two_sets_under_one_password_the_larger_is_read_and_the_other_counted() {
+    let key = password("correct horse battery");
+    let write = |seeds: &[u64], text: &str, needed: Option<u8>, random: u64| {
+        let covers: Vec<Cover> = seeds.iter().map(|&seed| photo(320, 240, seed)).collect();
+        let refs: Vec<&Cover> = covers.iter().collect();
+        let content = Content::text(text).unwrap();
+        let settings = Settings {
+            needed,
+            ..Settings::default()
+        };
+        let secret = Secret {
+            content: &content,
+            password: &key,
+        };
+        let result = hide(&refs, &settings, secret, None, &mut TestRandom(random)).unwrap();
+        result.files().to_vec()
+    };
+    let two = write(&[40, 41], "in two photos", None, 42);
+    let three = write(&[43, 44, 45], "in three photos", Some(2), 46);
+    // Photos 0 and 1 hold one whole set, photos 2 to 4 another: the larger is read, its photos
+    // are named and the other set is counted, not passed over in silence.
+    let files: Vec<Vec<u8>> = two.iter().chain(&three).cloned().collect();
+    let covers = reread(&files, &[0, 1, 2, 3, 4]);
+    let refs: Vec<&Cover> = covers.iter().collect();
+    let Reading::Complete(found) = reveal(&refs, &key).unwrap() else {
+        panic!("no set was read");
+    };
+    assert_eq!(found.content().as_text(), Some("in three photos"));
+    let photos: Vec<usize> = found.report().files.iter().map(|file| file.0).collect();
+    assert_eq!(photos, [2, 3, 4]);
+    assert_eq!(found.report().other_sets, 1);
+    // Without the larger set's photos the smaller one is read, and nothing else is there.
+    let covers = reread(&files, &[0, 1]);
+    let refs: Vec<&Cover> = covers.iter().collect();
+    let Reading::Complete(found) = reveal(&refs, &key).unwrap() else {
+        panic!("the smaller set was not read");
+    };
+    assert_eq!(found.content().as_text(), Some("in two photos"));
+    assert_eq!(found.report().other_sets, 0);
+}

@@ -104,6 +104,8 @@ Neither number is stored; the reader enters them. Level 0 opens on phones and in
 
 **Reading.** Nothing in a photo names the layer, rule or size. The reader tries each combination; only the right one passes the tag. A photo without a record gives the same answer as a wrong password.
 
+**Format generations.** Every key label and every associated data begins with `stego-core 1`; the number is the generation of the format. A change that readers of this generation could not follow takes the next number, so its records never open under these keys and nothing has to be guessed from a byte of the body; a reader tries each generation it supports. Inside a generation, a record that opens but holds a part or a message this version does not know is reported as another version's. Drafts before the first release change without a new number and are not kept readable.
+
 ## The decoy mode
 
 Whoever is forced to reveal a password gives the decoy's. The decoy is padded to the photo's recommended room, whatever the secret behind it, and the decoy mode also writes a lone message whose change directions are plain coins. The decoy password therefore sees the same record either way: its size and layer say nothing about a secret.
@@ -127,7 +129,11 @@ Four ideas are combined:
 
 The Reed–Solomon codec is stego-core's own: GF(2^8) with the polynomial x^8 + x^4 + x^3 + x^2 + 1, and the systematic matrix made from the Vandermonde matrix V[r][c] = r^c times the inverse of its top k rows. That is the construction of Backblaze's and klauspost's codes and of the `reed-solomon-erasure` crate, and the tests check that the pieces agree with that crate byte for byte for every shape up to 16 photos (four one-byte pieces 01 02 03 04 give the parity 45 5E). Row i depends only on i and k, so one lost piece can be made again from any k others, and a set can grow later without touching its pieces.
 
-Reading checks a set strictly: the same file given twice counts once; two different pieces under one number, or more than k pieces that do not agree with each other, are reported as a conflict instead of being chosen between; too few pieces are reported with how many were found and how many are needed. Writing refuses the same photo twice, since two records in copies of one photo would show their changes when the copies are compared.
+Reading checks a set strictly. The same file given twice counts once. In a k-of-n set every photo's payload is held to what this version writes before any piece is used: a threshold from 2 to 16, a key share that carries the photo's own number, one nonce and one ciphertext length across the set, and a piece of exactly the length that ciphertext gives. Two different pieces under one number, payloads that disagree, more than k pieces that do not belong to one code word, and enough pieces that do not open together are reported as a conflict instead of being chosen between; too few pieces are reported with how many were found and how many are needed. A message is taken as genuine only because its tag opens under the key the shares give: with exactly k pieces nothing else can check them. A record that opens under the password but is not in a form this version writes is reported as another version's, never as nothing.
+
+The photos may hold several sets under one password. Each set is judged on its own, so a set in conflict never hides a whole one. One set is answered for: a whole message if any set gives one, taking the set with the most photos and, among equals, the one whose first photo was given first; otherwise the state of the set with the most photos. The report names the photos of the set that was read and counts what else the password opened.
+
+Writing refuses the same photo twice, since two records in copies of one photo would show their changes when the copies are compared; the room refuses it the same way.
 
 Every photo carries one piece, one key share and the set's identifier, inside its own password-encrypted record. Sets have up to 16 photos; the pieces are of equal size, so the smallest photo bounds the room.
 
@@ -139,6 +145,7 @@ The recommended room is the largest message at 0.05 bits per non-zero AC coeffic
 
 - **Memory.** Every password, message and key lives in a `Secret`: whole pages of its own. On Linux they are secret memory (`memfd_secret`), which no process reads through `/proc` or `ptrace`, never swapped or dumped, and which blocks hibernation. Elsewhere they are locked pages advised out of core dumps. All are wiped when dropped. Argon2id's work area is pages of its own as well, wiped after each stretch.
 - **Isolation** (`Isolation::enter`, for the host program): no core dumps; no reading of the process's memory by other programs; no new sockets or io_uring (seccomp); no file writes (seccomp and Landlock on Linux, a sandbox on macOS, low integrity on Windows); an empty network namespace on Linux. Each protection is read back and reported, never assumed.
+- **What the memory protection does not reach.** The parts of a message between the cipher and the coder, and the key of a k-of-n set with its shares, are ordinary heap buffers, wiped after use but not on locked pages. The libraries keep working values of their own that this crate cannot wipe; the sharing library leaves the polynomial of the last byte it shared in freed memory, so a public zero byte is shared after the key and that leftover says nothing.
 
 ## References
 

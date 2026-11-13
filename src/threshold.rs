@@ -50,7 +50,10 @@ pub(crate) fn split(
     random.fill(key.as_mut())?;
     let mut nonce = [0; NONCE_BYTES];
     random.fill(&mut nonce)?;
-    let mut sealed = encoded.to_vec();
+    // The message until it is encrypted in place: wiped if the encryption is refused, and with
+    // room for the tag so that it is never copied to a larger buffer.
+    let mut sealed = Zeroizing::new(Vec::with_capacity(encoded.len() + TAG_BYTES));
+    sealed.extend_from_slice(encoded);
     let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| StegoError::Crypto)?;
     let tag = cipher
         .encrypt_inout_detached(
@@ -98,10 +101,10 @@ fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Vec<u8>>, StegoEr
         .collect()
 }
 
-/// One share of `key` per photo, any `needed` of which restore it. The polynomial's
-/// coefficients come from a ChaCha20 generator seeded with the host's fresh randomness; the
-/// generator wipes its state and its buffer when dropped (chacha20's `zeroize` feature), so
-/// nothing that could make the coefficients again stays behind.
+/// One share of `key` per photo, any `needed` of which restore it; photo `i` gets the share
+/// numbered `i + 1`. The polynomial's coefficients come from a ChaCha20 generator seeded with the
+/// host's fresh randomness; the generator wipes its state and its buffer when dropped (chacha20's
+/// `zeroize` feature), so nothing that could make the coefficients again stays behind.
 fn shares(
     key: &[u8; KEY_BYTES],
     needed: u8,
@@ -111,39 +114,136 @@ fn shares(
     let mut seed = Zeroizing::new([0; KEY_BYTES]);
     random.fill(seed.as_mut())?;
     let mut generator = ChaCha20Rng::from_seed(*seed);
-    let split = Gf256::split_bytes(usize::from(needed), count, key, &mut generator);
+    // vsss-rs shares a secret byte by byte and frees the last byte's polynomial without wiping
+    // it. A public zero byte after the key takes that place; its share byte is cut off again, and
+    // the shares of the key are what they would have been without it.
+    let mut padded = Zeroizing::new([0_u8; KEY_BYTES + 1]);
+    padded[..KEY_BYTES].copy_from_slice(key);
+    let split = Gf256::split_bytes(
+        usize::from(needed),
+        count,
+        padded.as_slice(),
+        &mut generator,
+    );
     drop(generator);
     let mut shares = split.map_err(|_| StegoError::Threshold)?;
-    let out = shares.iter().map(|s| Zeroizing::new(s.clone())).collect();
+    // The reader holds every share to its photo's number, so the writer checks the same.
+    let out = shares
+        .iter()
+        .zip(1_u8..)
+        .map(|(share, number)| {
+            (share.len() == SHARE_BYTES + 1 && share[0] == number)
+                .then(|| Zeroizing::new(share[..SHARE_BYTES].to_vec()))
+        })
+        .collect::<Option<Vec<_>>>();
     shares.iter_mut().for_each(Zeroize::zeroize);
-    Ok(out)
+    out.ok_or(StegoError::Threshold)
 }
 
-/// The number of photos a payload says its set needs.
-pub(crate) fn needed(payload: &[u8]) -> Option<u8> {
-    payload.first().copied()
-}
-
-/// A payload's parts.
+/// A payload's fields.
 struct Fields<'a> {
+    needed: u8,
     share: &'a [u8],
     nonce: &'a [u8],
     sealed_length: usize,
     shard: &'a [u8],
 }
 
-fn fields(payload: &[u8]) -> Option<Fields<'_>> {
+/// The fields of the payload of photo `index`, each held to what this version writes: a
+/// threshold from 2 to [`THRESHOLD_MAX`], a share of a 32-byte key that carries this photo's
+/// number (`index + 1`: vsss-rs numbers the shares from 1), a ciphertext long enough for its tag
+/// and a shard of exactly the length that ciphertext gives. `None` for anything else.
+fn fields(index: usize, payload: &[u8]) -> Option<Fields<'_>> {
+    let needed = *payload.first()?;
+    let k = usize::from(needed);
+    if !(2..=THRESHOLD_MAX).contains(&k) {
+        return None;
+    }
     let share_length = usize::from(u16::from_be_bytes([*payload.get(1)?, *payload.get(2)?]));
-    let share = payload.get(3..3 + share_length)?;
-    let nonce = payload.get(3 + share_length..3 + share_length + NONCE_BYTES)?;
-    let at = 3 + share_length + NONCE_BYTES;
+    if share_length != SHARE_BYTES {
+        return None;
+    }
+    let share = payload.get(3..3 + SHARE_BYTES)?;
+    if usize::from(share[0]) != index + 1 {
+        return None;
+    }
+    let at = 3 + SHARE_BYTES;
+    let nonce = payload.get(at..at + NONCE_BYTES)?;
+    let at = at + NONCE_BYTES;
     let length: [u8; LENGTH_BYTES] = payload.get(at..at + LENGTH_BYTES)?.try_into().ok()?;
     let sealed_length = usize::try_from(u32::from_be_bytes(length)).ok()?;
+    let shard = payload.get(at + LENGTH_BYTES..)?;
+    if sealed_length < TAG_BYTES || shard.len() != sealed_length.div_ceil(k) {
+        return None;
+    }
     Some(Fields {
+        needed,
         share,
         nonce,
         sealed_length,
-        shard: payload.get(at + LENGTH_BYTES..)?,
+        shard,
+    })
+}
+
+/// What the payloads of one set say before any piece is used.
+pub(crate) enum Form {
+    /// A payload is not in the form this version writes.
+    Malformed,
+    /// The payloads name different thresholds, nonces or ciphertext lengths: they are not parts
+    /// of one message.
+    Inconsistent,
+    /// Every payload is well formed and they agree: the set needs this many photos.
+    Agreed {
+        /// Photos needed to read the set.
+        needed: usize,
+    },
+}
+
+/// Checks `(photo number, payload)` pairs of one set without opening anything.
+pub(crate) fn form(payloads: &[(usize, &[u8])]) -> Form {
+    match parse(payloads) {
+        Ok(parsed) => Form::Agreed {
+            needed: usize::from(parsed.needed),
+        },
+        Err(Flaw::Malformed) => Form::Malformed,
+        Err(Flaw::Inconsistent) => Form::Inconsistent,
+    }
+}
+
+/// Why payloads cannot be parts of one set.
+enum Flaw {
+    Malformed,
+    Inconsistent,
+}
+
+/// The payloads of one set, all well formed and in agreement.
+struct Parsed<'a> {
+    needed: u8,
+    nonce: &'a [u8],
+    sealed_length: usize,
+    /// Per photo: its number, its share and its shard.
+    parts: Vec<(usize, &'a [u8], &'a [u8])>,
+}
+
+fn parse<'a>(payloads: &[(usize, &'a [u8])]) -> Result<Parsed<'a>, Flaw> {
+    let all: Vec<(usize, Fields<'a>)> = payloads
+        .iter()
+        .map(|&(i, p)| fields(i, p).map(|f| (i, f)))
+        .collect::<Option<_>>()
+        .ok_or(Flaw::Malformed)?;
+    let (_, first) = all.first().ok_or(Flaw::Malformed)?;
+    let (needed, nonce, sealed_length) = (first.needed, first.nonce, first.sealed_length);
+    if all
+        .iter()
+        .any(|(_, f)| (f.needed, f.nonce, f.sealed_length) != (needed, nonce, sealed_length))
+    {
+        return Err(Flaw::Inconsistent);
+    }
+    Ok(Parsed {
+        needed,
+        nonce,
+        sealed_length,
+        parts: all.iter().map(|(i, f)| (*i, f.share, f.shard)).collect(),
     })
 }
 
@@ -151,45 +251,54 @@ fn fields(payload: &[u8]) -> Option<Fields<'_>> {
 pub(crate) enum Joined {
     /// The encoded message.
     Message(Zeroizing<Vec<u8>>),
-    /// More than k pieces were given and they do not all belong to one set.
+    /// A payload is not in the form this version writes.
+    Malformed,
+    /// The parts are not of one message: their fields differ, or more than k pieces were given
+    /// and they do not all belong to one code word.
     Inconsistent,
-    /// The pieces do not rebuild a ciphertext that opens.
+    /// The parts agree in form but do not rebuild a ciphertext that opens. With exactly k parts
+    /// nothing but the final tag can tell: the pieces have no spare to check each other.
     Unreadable,
 }
 
 /// Restores the encoded message from `(photo number, payload)` pairs of one set. How many
 /// photos were issued is not needed, so a set that was given more photos later reads the same.
+/// The message is taken as genuine only because its tag opens under the key the shares give;
+/// the agreement of the pieces alone proves nothing.
 pub(crate) fn join(payloads: &[(usize, &[u8])], set: &[u8]) -> Joined {
-    join_checked(payloads, set).unwrap_or(Joined::Unreadable)
+    match parse(payloads) {
+        Ok(parsed) => open(&parsed, set).unwrap_or(Joined::Unreadable),
+        Err(Flaw::Malformed) => Joined::Malformed,
+        Err(Flaw::Inconsistent) => Joined::Inconsistent,
+    }
 }
 
-fn join_checked(payloads: &[(usize, &[u8])], set: &[u8]) -> Option<Joined> {
-    let k = usize::from(needed(payloads.first()?.1)?);
-    let parsed: Vec<(usize, Fields<'_>)> = payloads
+fn open(parsed: &Parsed<'_>, set: &[u8]) -> Option<Joined> {
+    let k = usize::from(parsed.needed);
+    let pieces: Vec<(usize, &[u8])> = parsed
+        .parts
         .iter()
-        .map(|&(i, p)| fields(p).map(|f| (i, f)))
-        .collect::<Option<_>>()?;
-    let first = &parsed.first()?.1;
-    if parsed
-        .iter()
-        .any(|(index, _)| *index >= crate::shard::PIECES_MAX)
-    {
-        return None;
-    }
-    let pieces: Vec<(usize, &[u8])> = parsed.iter().map(|(i, f)| (*i, f.shard)).collect();
+        .map(|&(i, _, shard)| (i, shard))
+        .collect();
     let code = Code::new(k).ok()?;
     // Every piece beyond k must agree with the others, or the set is mixed.
     if pieces.len() > k && !code.consistent(&pieces).ok()? {
         return Some(Joined::Inconsistent);
     }
+    // `fields` held every shard to the ciphertext's length over k, so the k data pieces hold it.
     let mut sealed = code.rebuild(&pieces).ok()?.concat();
-    sealed.truncate(first.sealed_length);
+    sealed.truncate(parsed.sealed_length);
     let body_length = sealed.len().checked_sub(TAG_BYTES)?;
     let tag = Tag::try_from(&sealed[body_length..]).ok()?;
-    let nonce = XNonce::try_from(first.nonce).ok()?;
+    let nonce = XNonce::try_from(parsed.nonce).ok()?;
     // Wiped on every return, early ones included.
-    let shares: Zeroizing<Vec<Vec<u8>>> =
-        Zeroizing::new(parsed.iter().map(|(_, f)| f.share.to_vec()).collect());
+    let shares: Zeroizing<Vec<Vec<u8>>> = Zeroizing::new(
+        parsed
+            .parts
+            .iter()
+            .map(|&(_, share, _)| share.to_vec())
+            .collect(),
+    );
     let key = Zeroizing::new(Gf256::combine_bytes(&*shares).ok()?);
     let mut plain = Zeroizing::new(sealed[..body_length].to_vec());
     let cipher = XChaCha20Poly1305::new_from_slice(&key).ok()?;
@@ -261,6 +370,78 @@ mod tests {
             (2, forged.as_slice()),
         ];
         assert!(matches!(join(&mixed, &set), Joined::Inconsistent));
+    }
+
+    /// Where a payload keeps its share and its nonce.
+    const SHARE: std::ops::Range<usize> = 3..3 + SHARE_BYTES;
+    const NONCE: std::ops::Range<usize> = 3 + SHARE_BYTES..3 + SHARE_BYTES + NONCE_BYTES;
+
+    #[test]
+    fn a_share_under_another_photos_number_is_refused() {
+        let set = [8; 16];
+        let parts = split(MESSAGE, 2, 3, &set, &mut Counter(11)).unwrap();
+        // Photos 0 and 1 with each other's whole shares: the same two points and so the same key,
+        // which the tag alone would accept.
+        let mut first = parts[0].to_vec();
+        let mut second = parts[1].to_vec();
+        first[SHARE].copy_from_slice(&parts[1][SHARE]);
+        second[SHARE].copy_from_slice(&parts[0][SHARE]);
+        let swapped = [(0, first.as_slice()), (1, second.as_slice())];
+        assert!(matches!(form(&swapped), Form::Malformed));
+        assert!(matches!(join(&swapped, &set), Joined::Malformed));
+    }
+
+    #[test]
+    fn parts_of_two_messages_under_one_set_number_do_not_join() {
+        let set = [9; 16];
+        let one = split(MESSAGE, 2, 3, &set, &mut Counter(12)).unwrap();
+        let other = split(MESSAGE, 2, 3, &set, &mut Counter(13)).unwrap();
+        // Exactly k parts, one of each message: their nonces differ, so they are told apart
+        // before any piece is used.
+        let mixed = [(0, one[0].as_slice()), (1, other[1].as_slice())];
+        assert!(matches!(form(&mixed), Form::Inconsistent));
+        assert!(matches!(join(&mixed, &set), Joined::Inconsistent));
+        // With the nonce copied over, the fields agree and only the tag can tell.
+        let mut forged = other[1].to_vec();
+        forged[NONCE].copy_from_slice(&one[1][NONCE]);
+        let mixed = [(0, one[0].as_slice()), (1, forged.as_slice())];
+        assert!(matches!(form(&mixed), Form::Agreed { needed: 2 }));
+        assert!(matches!(join(&mixed, &set), Joined::Unreadable));
+    }
+
+    #[test]
+    fn payloads_this_version_does_not_write_are_malformed() {
+        let set = [10; 16];
+        let parts = split(MESSAGE, 2, 3, &set, &mut Counter(14)).unwrap();
+        let malformed = |change: &dyn Fn(&mut Vec<u8>)| {
+            let mut payload = parts[0].to_vec();
+            change(&mut payload);
+            let pair = [(0, payload.as_slice()), (1, parts[1].as_slice())];
+            matches!(form(&pair), Form::Malformed) && matches!(join(&pair, &set), Joined::Malformed)
+        };
+        // A threshold of 1, or above the most photos of a set.
+        assert!(malformed(&|p| p[0] = 1));
+        assert!(malformed(&|p| p[0] = 17));
+        // A share of another length: the drafts that shared the key with SSKR wrote 37 bytes.
+        assert!(malformed(&|p| {
+            p[2] = 37;
+            p.splice(3..3, [0; 4]);
+        }));
+        // A shard one byte short or long for its ciphertext.
+        assert!(malformed(&|p| {
+            p.pop();
+        }));
+        assert!(malformed(&|p| p.push(0)));
+        // A ciphertext too short to hold its tag.
+        let length = NONCE.end..NONCE.end + LENGTH_BYTES;
+        assert!(malformed(
+            &|p| p[length.clone()].copy_from_slice(&15_u32.to_be_bytes())
+        ));
+        // Unchanged, the same payloads agree.
+        assert!(matches!(
+            form(&pairs(&parts, &[0, 1])),
+            Form::Agreed { needed: 2 }
+        ));
     }
 
     #[test]

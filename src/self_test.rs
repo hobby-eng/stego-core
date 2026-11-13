@@ -112,6 +112,12 @@ pub fn full_self_test() -> SelfTest {
     all
 }
 
+/// The sample photo, for the tests of other modules.
+#[cfg(test)]
+pub(crate) fn sample_photo() -> Vec<u8> {
+    sample::SAMPLE.to_vec()
+}
+
 fn hex(text: &str) -> Vec<u8> {
     (0..text.len())
         .step_by(2)
