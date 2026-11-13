@@ -141,8 +141,8 @@ pub struct Settings {
     /// The site rule of the standard mode. The decoy mode always uses [`SiteRule::Grow1`].
     pub site_rule: SiteRule,
     /// With several photos: `None` splits each message so that every photo is needed;
-    /// `Some(k)` makes any `k` photos enough (Shamir's sharing through SSKR), and then every
-    /// photo carries each message whole.
+    /// `Some(k)` makes any `k` photos enough: every photo carries a Reed–Solomon shard of 1/k
+    /// of the encrypted message and a Shamir (SSKR) share of its key.
     pub needed: Option<u8>,
 }
 

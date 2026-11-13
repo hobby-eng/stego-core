@@ -10,6 +10,7 @@ Runtime dependencies, pinned exactly in `Cargo.toml`:
 | hkdf, sha2               | Key separation and hashes                                           | MIT OR Apache-2.0   |
 | sskr, bc-shamir, bc-rand | Shamir sharing of the key of a k-of-n set (Blockchain Commons SSKR) | BSD-2-Clause-Patent |
 | rand_chacha, rand_core   | The SSKR generator, seeded from the host's random source            | MIT OR Apache-2.0   |
+| reed-solomon-erasure     | Shards of a k-of-n set, any k of which rebuild the ciphertext       | MIT                 |
 | unicode-normalization    | NFKD of passwords                                                   | MIT OR Apache-2.0   |
 | zeroize                  | Wiping secrets                                                      | MIT OR Apache-2.0   |
 

@@ -11,7 +11,7 @@ Status: experimental. The record format may still change while the detectability
 - Two modes:
   - standard: one record, ternary syndrome-trellis code (STC);
   - with decoy: a decoy with its own password, and the secret carried by the directions of the decoy's changes (a keyed wet-paper code). With only the decoy password, nothing shows that a second record exists.
-- Several photos: a message is split so that every photo is needed, or shared with SSKR so that any `k` of `n` photos open it. Both work in the decoy mode too, for the decoy and the secret alike.
+- Several photos: a message is split so that every photo is needed, or spread so that any `k` of `n` photos open it: each photo carries a Reed–Solomon shard of 1/k of the encrypted message and an SSKR (Shamir) share of its key. Both work in the decoy mode too, for the decoy and the secret alike.
 - Every new set of files is read back with each password, and each message's SHA-256 is compared, before the files are returned.
 - Cost models: J-UNIWARD, J-MiPOD, J-CRFW and UERD. Site rules: `frozen1`, `grow1`, `keep2`. The reader tries all of them, so changing the default never makes older files unreadable.
 - Reports every technical detail of a job (mode, model, rule, sites, changes, rate in bits per non-zero AC coefficient, key derivation, cipher) for an advanced view.

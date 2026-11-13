@@ -1,8 +1,8 @@
 //! A message spread over several photos. Each photo's record holds the set it belongs to, the
 //! scheme, its number and the count, then its payload:
 //! - split: a slice of the message; every photo is needed;
-//! - threshold: the ciphertext and one key share; any `needed` photos suffice
-//!   (`crate::threshold`).
+//! - threshold: a Reed–Solomon shard of the ciphertext and one key share; any `needed`
+//!   photos suffice (`crate::threshold`).
 //!
 //! The photos may be read in any order.
 
@@ -144,8 +144,11 @@ pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembly> {
         });
     }
     let encoded = if scheme == THRESHOLD {
-        let payloads: Vec<&[u8]> = parts.iter().map(|p| p.payload.as_slice()).collect();
-        threshold::join(&payloads, &set)?
+        let payloads: Vec<(usize, &[u8])> = parts
+            .iter()
+            .map(|p| (usize::from(p.index), p.payload.as_slice()))
+            .collect();
+        threshold::join(&payloads, usize::from(count), &set)?
     } else {
         let mut joined = Zeroizing::new(Vec::new());
         for part in &parts {
