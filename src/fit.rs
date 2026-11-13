@@ -6,7 +6,7 @@ use crate::coding::{HIDDEN_CAP, HIDDEN_MARGIN};
 use crate::content::{CONTENT_HEADER, Content};
 use crate::cover::{Cover, HIDDEN_SHARE, MAX_BITS_PER_SITE, RECOMMENDED_BPNZAC};
 use crate::mode::{Mode, Settings};
-use crate::parts::{CARRIERS_MAX, PART_HEADER};
+use crate::parts::PART_HEADER;
 use crate::record::{LENGTH_BYTES, bodies, record_bits};
 use crate::sites::Sites;
 use crate::{StegoError, threshold};
@@ -70,17 +70,16 @@ struct Limits {
 ///
 /// # Errors
 ///
-/// [`StegoError::Carriers`] for no photos or too many, [`StegoError::DecoyChoice`] when the
-/// decoy does not match the mode, [`StegoError::Threshold`] for an impossible threshold.
+/// [`StegoError::Carriers`] for no photos or too many, [`StegoError::DuplicatePhoto`] for the
+/// same photo twice (as writing would refuse it), [`StegoError::DecoyChoice`] when the decoy
+/// does not match the mode, [`StegoError::Threshold`] for an impossible threshold.
 pub fn fit(
     covers: &[&Cover],
     settings: &Settings,
     secret: &Content,
     decoy: Option<&Content>,
 ) -> Result<Fit, StegoError> {
-    if covers.is_empty() || covers.len() > CARRIERS_MAX {
-        return Err(StegoError::Carriers);
-    }
+    crate::hide::check_carriers(covers)?;
     if let Some(needed) = settings.needed
         && (needed < 2
             || usize::from(needed) > covers.len()

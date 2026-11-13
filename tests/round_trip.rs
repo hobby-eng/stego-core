@@ -7,7 +7,7 @@
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use stego_core::{
-    Content, Cover, Mode, Password, Random, Reading, Secret, Settings, StegoError, WorkFactor,
+    Content, Cover, Mode, Password, Random, Reading, Secret, Settings, StegoError, WorkFactor, fit,
     hide, reveal,
 };
 
@@ -408,7 +408,7 @@ fn a_record_opens_only_with_the_pim_and_memory_level_it_was_written_with() {
 }
 
 #[test]
-fn a_photo_given_twice_is_read_once_and_refused_for_writing() {
+fn a_photo_given_twice_is_read_once_and_refused_for_room_and_writing() {
     let cover = photo(640, 480, 25);
     let secret = Content::text("only once").unwrap();
     let key = password("correct horse battery");
@@ -425,6 +425,15 @@ fn a_photo_given_twice_is_read_once_and_refused_for_writing() {
     .unwrap_err();
     assert_eq!(error, StegoError::DuplicatePhoto);
     let other = photo(640, 480, 27);
+    // The room refuses what writing refuses: A, B, A for 2 of 3 is not a set of three photos.
+    let two_of_three = Settings {
+        needed: Some(2),
+        ..Settings::default()
+    };
+    assert_eq!(
+        fit(&[&cover, &other, &cover], &two_of_three, &secret, None).unwrap_err(),
+        StegoError::DuplicatePhoto
+    );
     let result = hide(
         &[&cover, &other],
         &Settings::default(),

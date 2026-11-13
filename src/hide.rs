@@ -56,20 +56,10 @@ struct Written {
     decoy: Option<RecordReport>,
 }
 
-/// Hides `secret` (and in the decoy mode `decoy`) in `covers`.
-///
-/// # Errors
-///
-/// [`StegoError::Carriers`], [`StegoError::DecoyChoice`] or [`StegoError::PasswordsEqual`] for a
-/// wrong request; [`StegoError::MessageLong`] or [`StegoError::HiddenLong`] when a message does
-/// not fit; [`StegoError::Verification`] when the new files do not read back exactly.
-pub fn hide(
-    covers: &[&Cover],
-    settings: &Settings,
-    secret: Secret<'_>,
-    decoy: Option<Secret<'_>>,
-    random: &mut dyn Random,
-) -> Result<HideResult, StegoError> {
+/// The photos chosen for writing: between 1 and [`CARRIERS_MAX`], each a different file. The
+/// room ([`crate::fit`]) and the writing apply the same check, so the room never counts a photo
+/// that writing would refuse.
+pub(crate) fn check_carriers(covers: &[&Cover]) -> Result<(), StegoError> {
     if covers.is_empty() || covers.len() > CARRIERS_MAX {
         return Err(StegoError::Carriers);
     }
@@ -78,6 +68,25 @@ pub fn hide(
     if seen.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(StegoError::DuplicatePhoto);
     }
+    Ok(())
+}
+
+/// Hides `secret` (and in the decoy mode `decoy`) in `covers`.
+///
+/// # Errors
+///
+/// [`StegoError::Carriers`], [`StegoError::DuplicatePhoto`], [`StegoError::DecoyChoice`] or
+/// [`StegoError::PasswordsEqual`] for a wrong request; [`StegoError::MessageLong`] or
+/// [`StegoError::HiddenLong`] when a message does not fit; [`StegoError::Verification`] when the
+/// new files do not read back exactly.
+pub fn hide(
+    covers: &[&Cover],
+    settings: &Settings,
+    secret: Secret<'_>,
+    decoy: Option<Secret<'_>>,
+    random: &mut dyn Random,
+) -> Result<HideResult, StegoError> {
+    check_carriers(covers)?;
     let weights: Vec<usize> = covers
         .iter()
         .map(|c| {
