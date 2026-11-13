@@ -1,6 +1,7 @@
 //! Record passwords: NFKD-normalized UTF-8 in a wiped owner (CORE-24).
 
 use crate::StegoError;
+use crate::keys::WorkFactor;
 use crate::protect::Secret;
 use std::fmt;
 use unicode_normalization::UnicodeNormalization;
@@ -15,6 +16,7 @@ pub const PASSWORD_MAX: usize = 1024;
 /// A password after Unicode NFKD. Spaces and case stay significant; nothing is trimmed.
 pub struct Password {
     bytes: Secret,
+    work: WorkFactor,
 }
 
 impl Password {
@@ -47,7 +49,10 @@ impl Password {
         }
         let mut locked = Secret::with_capacity(bytes.len());
         locked.push(&bytes)?;
-        Ok(Self { bytes: locked })
+        Ok(Self {
+            bytes: locked,
+            work: WorkFactor::default(),
+        })
     }
 
     /// Whether both passwords have the same normalized bytes.
@@ -60,6 +65,19 @@ impl Password {
                 .zip(other.bytes().iter())
                 .fold(0_u8, |acc, (a, b)| acc | (a ^ b))
                 == 0
+    }
+
+    /// The same password with another PIM and memory level; reading needs the same ones.
+    #[must_use]
+    pub const fn with_work(mut self, work: WorkFactor) -> Self {
+        self.work = work;
+        self
+    }
+
+    /// The PIM and memory level.
+    #[must_use]
+    pub const fn work(&self) -> WorkFactor {
+        self.work
     }
 
     pub(crate) fn bytes(&self) -> &[u8] {

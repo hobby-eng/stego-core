@@ -1,7 +1,7 @@
 //! The technical record of a hiding or reading job, for the advanced view.
 
 use crate::cover::PhotoInfo;
-use crate::keys::{KDF_LANES, KDF_MEMORY_KIB, KDF_PASSES};
+use crate::keys::KDF_LANES;
 use crate::mode::Settings;
 use crate::sites::SiteRule;
 
@@ -10,10 +10,6 @@ use crate::sites::SiteRule;
 pub struct Parameters {
     /// Password stretching.
     pub kdf: &'static str,
-    /// Argon2id memory in KiB.
-    pub kdf_memory_kib: u32,
-    /// Argon2id passes.
-    pub kdf_passes: u32,
     /// Argon2id lanes.
     pub kdf_lanes: u32,
     /// Record cipher.
@@ -28,9 +24,7 @@ pub struct Parameters {
 #[must_use]
 pub const fn parameters() -> Parameters {
     Parameters {
-        kdf: "Argon2id v1.3",
-        kdf_memory_kib: KDF_MEMORY_KIB,
-        kdf_passes: KDF_PASSES,
+        kdf: "Argon2id v1.3; memory and passes from each password's PIM and memory level",
         kdf_lanes: KDF_LANES,
         cipher: "XChaCha20-Poly1305",
         stc_height: crate::algorithm::stc::HEIGHT,
@@ -87,6 +81,10 @@ pub struct RecordReport {
     pub parts: u16,
     /// Message bytes this photo carries.
     pub part_bytes: usize,
+    /// Argon2id memory of the record's password, in KiB.
+    pub kdf_memory_kib: u32,
+    /// Argon2id passes of the record's password.
+    pub kdf_passes: u32,
 }
 
 /// One written photo.

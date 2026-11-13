@@ -87,6 +87,8 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
                 part: part.index(),
                 parts: part.count(),
                 part_bytes: found.plain.len() - crate::parts::PART_HEADER,
+                kdf_memory_kib: password.work().memory_kib(),
+                kdf_passes: password.work().passes(),
             },
         ));
         parts.push(part);

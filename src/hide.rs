@@ -166,11 +166,15 @@ fn finish(
             secret: RecordReport {
                 part: index,
                 parts: total,
+                kdf_memory_kib: secret.password.work().memory_kib(),
+                kdf_passes: secret.password.work().passes(),
                 ..w.secret
             },
-            decoy: w.decoy.map(|d| RecordReport {
+            decoy: w.decoy.zip(decoy).map(|(d, owner)| RecordReport {
                 part: index,
                 parts: total,
+                kdf_memory_kib: owner.password.work().memory_kib(),
+                kdf_passes: owner.password.work().passes(),
                 ..d
             }),
         })
@@ -216,6 +220,8 @@ const fn record(layer: Layer, site_rule: SiteRule, body: usize, part_bytes: usiz
         part: 0,
         parts: 1,
         part_bytes,
+        kdf_memory_kib: 0,
+        kdf_passes: 0,
     }
 }
 

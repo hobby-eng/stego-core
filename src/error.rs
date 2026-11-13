@@ -46,6 +46,10 @@ pub enum StegoError {
     Crypto,
     /// The system refused the memory of the password stretch.
     Memory,
+    /// The PIM is above [`crate::WorkFactor::MAX_PIM`].
+    Pim,
+    /// The memory level is above [`crate::WorkFactor::MAX_MEMORY_LEVEL`].
+    MemoryLevel,
     /// A cost model refused its input.
     Costs(CostError),
     /// The syndrome coder could not place the message.
@@ -93,7 +97,9 @@ impl fmt::Display for StegoError {
             }
             Self::Random => "the system's random source failed",
             Self::Crypto => "a key derivation or cipher step failed",
-            Self::Memory => "the system refused the 128 MiB the password stretch needs",
+            Self::Memory => "the system refused the memory the password stretch needs",
+            Self::Pim => "the PIM must be from 0 to 1023",
+            Self::MemoryLevel => "the memory level must be from 0 to 29",
             Self::Costs(e) => return write!(f, "the cost model refused the photo: {e}"),
             Self::Coding => "the coder could not place the message; try a shorter message",
             Self::Verification => {

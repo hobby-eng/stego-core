@@ -12,12 +12,73 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::{Zeroize, Zeroizing};
 
-/// Argon2id memory in KiB: 128 MiB, the cost an attacker pays for every guess.
-pub const KDF_MEMORY_KIB: u32 = 128 * 1024;
-/// Argon2id passes.
-pub const KDF_PASSES: u32 = 3;
 /// Argon2id lanes; one, so that a browser without threads computes the same key.
 pub const KDF_LANES: u32 = 1;
+/// Argon2id passes at PIM 0.
+const BASE_PASSES: u32 = 3;
+
+/// The two settings a person may choose for a password, as in mhfe_core: the PIM multiplies the
+/// Argon2id passes and the memory level sets its memory. Both default to 0: 3 passes and
+/// 128 MiB. Neither is stored in the photo; whoever reads must enter the same two numbers.
+///
+/// The series is mhfe_core's, started lower so that phones and browsers open the default: level
+/// 8 here is mhfe_core's level 0 (2 GiB). A browser cannot go past about 2 GiB (level 8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkFactor {
+    pim: u32,
+    memory_level: u32,
+}
+
+impl WorkFactor {
+    /// The highest PIM. A factor of 1,024 already adds only ten bits while it turns seconds into
+    /// hours.
+    pub const MAX_PIM: u32 = 1023;
+    /// The highest memory level: 3 TiB. Level 30 would need 2^32 KiB, one more than Argon2
+    /// accepts.
+    pub const MAX_MEMORY_LEVEL: u32 = 29;
+
+    /// Accepts a PIM up to [`WorkFactor::MAX_PIM`] and a memory level up to
+    /// [`WorkFactor::MAX_MEMORY_LEVEL`].
+    ///
+    /// # Errors
+    ///
+    /// [`StegoError::Pim`], then [`StegoError::MemoryLevel`].
+    pub const fn new(pim: u32, memory_level: u32) -> Result<Self, StegoError> {
+        if pim > Self::MAX_PIM {
+            return Err(StegoError::Pim);
+        }
+        if memory_level > Self::MAX_MEMORY_LEVEL {
+            return Err(StegoError::MemoryLevel);
+        }
+        Ok(Self { pim, memory_level })
+    }
+
+    /// The PIM.
+    #[must_use]
+    pub const fn pim(self) -> u32 {
+        self.pim
+    }
+
+    /// The memory level.
+    #[must_use]
+    pub const fn memory_level(self) -> u32 {
+        self.memory_level
+    }
+
+    /// The Argon2id passes `t(PIM) = 3 * (PIM + 1)`.
+    #[must_use]
+    pub const fn passes(self) -> u32 {
+        BASE_PASSES * (self.pim + 1)
+    }
+
+    /// The Argon2id memory `m(MEM) = (2 + MEM mod 2) * 2^(16 + floor(MEM / 2))` in KiB: 128,
+    /// 192, 256, 384, 512, 768 MiB, 1 GiB and so on, up to 3 TiB at level 29.
+    #[must_use]
+    pub const fn memory_kib(self) -> u32 {
+        (2 + self.memory_level % 2) << (16 + self.memory_level / 2)
+    }
+}
+
 /// Bytes of every key.
 pub(crate) const KEY_BYTES: usize = 32;
 
@@ -46,13 +107,17 @@ impl Keys {
         password: &Password,
         context: &[u8; KEY_BYTES],
     ) -> Result<Self, StegoError> {
-        let parameters = Params::new(KDF_MEMORY_KIB, KDF_PASSES, KDF_LANES, Some(KEY_BYTES))
+        let work = password.work();
+        let parameters = Params::new(work.memory_kib(), work.passes(), KDF_LANES, Some(KEY_BYTES))
             .map_err(|_| StegoError::Crypto)?;
+        let area_bytes = parameters
+            .block_count()
+            .checked_mul(Block::SIZE)
+            .ok_or(StegoError::Memory)?;
         // The work area holds every intermediate block of the password's stretch: pages of its
         // own, locked where the limit allows and wiped before they are given back, as mhfe_core's
         // engine keeps them.
-        let mut area =
-            Pages::work_area(parameters.block_count() * Block::SIZE).ok_or(StegoError::Memory)?;
+        let mut area = Pages::work_area(area_bytes).ok_or(StegoError::Memory)?;
         let mut root = Secret::zeroed(KEY_BYTES);
         let stretched = Argon2::new(Algorithm::Argon2id, Version::V0x13, parameters)
             .hash_password_into_with_memory(
@@ -180,5 +245,21 @@ mod tests {
         sorted.sort_unstable();
         assert_eq!(sorted, (0..1000).collect::<Vec<u32>>());
         assert_ne!(order, b.order(1000).unwrap());
+    }
+
+    #[test]
+    fn memory_levels_follow_the_series_and_level_8_is_mhfe_s_level_0() {
+        let mib = [128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072];
+        for (level, expected) in (0..).zip(mib) {
+            assert_eq!(
+                WorkFactor::new(0, level).unwrap().memory_kib(),
+                expected * 1024
+            );
+        }
+        let top = WorkFactor::new(WorkFactor::MAX_PIM, WorkFactor::MAX_MEMORY_LEVEL).unwrap();
+        assert_eq!(u64::from(top.memory_kib()), 3 << 30);
+        assert_eq!(top.passes(), 3 * 1024);
+        assert_eq!(WorkFactor::new(1024, 0).unwrap_err(), StegoError::Pim);
+        assert_eq!(WorkFactor::new(0, 30).unwrap_err(), StegoError::MemoryLevel);
     }
 }

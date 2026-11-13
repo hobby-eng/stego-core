@@ -7,7 +7,8 @@
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use stego_core::{
-    Content, Cover, Mode, Password, Random, Reading, Secret, Settings, StegoError, hide, reveal,
+    Content, Cover, Mode, Password, Random, Reading, Secret, Settings, StegoError, WorkFactor,
+    hide, reveal,
 };
 
 /// A deterministic source for tests only (SplitMix64).
@@ -372,4 +373,35 @@ fn the_decoy_password_sees_the_same_record_with_or_without_a_secret_behind_it() 
         (record.layer, record.body_bytes, record.record_bits)
     };
     assert_eq!(seen(with_secret.files()), seen(alone.files()));
+}
+
+#[test]
+fn a_record_opens_only_with_the_pim_and_memory_level_it_was_written_with() {
+    let cover = photo(640, 480, 23);
+    let secret = Content::text("stretched harder").unwrap();
+    let work = WorkFactor::new(1, 1).unwrap();
+    assert_eq!((work.passes(), work.memory_kib()), (6, 192 * 1024));
+    let key = password("correct horse battery").with_work(work);
+    let result = hide(
+        &[&cover],
+        &Settings::default(),
+        Secret {
+            content: &secret,
+            password: &key,
+        },
+        None,
+        &mut TestRandom(24),
+    )
+    .unwrap();
+    assert_eq!(result.report().files[0].secret.kdf_passes, 6);
+    let covers = reread(result.files(), &[0]);
+    assert_eq!(
+        read_text(&covers, &key).as_deref(),
+        Some("stretched harder")
+    );
+    let refs: Vec<&Cover> = covers.iter().collect();
+    assert!(matches!(
+        reveal(&refs, &password("correct horse battery")).unwrap(),
+        Reading::Nothing
+    ));
 }

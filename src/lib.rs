@@ -43,7 +43,7 @@ pub use error::StegoError;
 pub use fit::{Fit, Room, fit};
 pub use hide::{HideResult, Secret, hide};
 pub use inspect::{Coding, Inspection, Segment, inspect};
-pub use keys::{KDF_LANES, KDF_MEMORY_KIB, KDF_PASSES};
+pub use keys::{KDF_LANES, WorkFactor};
 pub use mode::{CostModel, Mode, Settings};
 pub use parts::CARRIERS_MAX;
 pub use password::{PASSWORD_MAX, PASSWORD_MIN, Password};
