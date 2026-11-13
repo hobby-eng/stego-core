@@ -17,12 +17,11 @@ pub const KDF_LANES: u32 = 1;
 /// Argon2id passes at PIM 0.
 const BASE_PASSES: u32 = 3;
 
-/// The two settings a person may choose for a password, as in mhfe_core: the PIM multiplies the
+/// The two settings a person may choose for a password: the PIM multiplies the
 /// Argon2id passes and the memory level sets its memory. Both default to 0: 3 passes and
 /// 128 MiB. Neither is stored in the photo; whoever reads must enter the same two numbers.
 ///
-/// The series is mhfe_core's, started lower so that phones and browsers open the default: level
-/// 8 here is mhfe_core's level 0 (2 GiB). A browser cannot go past about 2 GiB (level 8).
+/// Level 0 opens on phones and in browsers; a browser cannot go past about 2 GiB (level 8).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WorkFactor {
     pim: u32,
@@ -248,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_levels_follow_the_series_and_level_8_is_mhfe_s_level_0() {
+    fn memory_levels_follow_the_series_from_128_mib() {
         let mib = [128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072];
         for (level, expected) in (0..).zip(mib) {
             assert_eq!(
