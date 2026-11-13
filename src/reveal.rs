@@ -41,7 +41,8 @@ pub enum Reading {
     /// two different sets were mixed, or one was altered.
     Conflict,
     /// The password opened a record, so it is right, but what the record holds is not in a form
-    /// this version reads: another version of the program wrote it.
+    /// this version reads, as a record of another version of the program would be. The tag
+    /// says the record is whole, not who wrote it.
     Unsupported,
 }
 
@@ -84,8 +85,9 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
     }
     let mut parts = Vec::new();
     let mut files = Vec::new();
-    // Records that opened without a part this version knows: the tag vouches for them, so they
-    // are another version's and never passed over as if nothing had opened.
+    // Records that opened without a part this version knows: the tag says they are whole, so
+    // they are reported as a form this version does not read, never passed over as if nothing
+    // had opened.
     let mut unknown = 0;
     let mut seen: Vec<&[u8; 32]> = Vec::with_capacity(covers.len());
     for (index, cover) in covers.iter().enumerate() {

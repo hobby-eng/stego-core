@@ -54,16 +54,25 @@ pub(crate) fn spread(
     };
     Ok((0_u16..)
         .zip(payloads)
-        .map(|(index, payload)| {
-            let mut part = Zeroizing::new(Vec::with_capacity(PART_HEADER + payload.len()));
-            part.extend_from_slice(&set);
-            part.push(scheme);
-            part.extend_from_slice(&index.to_be_bytes());
-            part.extend_from_slice(&count.to_be_bytes());
-            part.extend_from_slice(&payload);
-            part
-        })
+        .map(|(index, payload)| part(&set, scheme, (index, count), &payload))
         .collect())
+}
+
+/// A part as a record holds it: the set, the scheme, the part's number and the count, then its
+/// payload.
+fn part(
+    set: &[u8; SET_BYTES],
+    scheme: u8,
+    (index, count): (u16, u16),
+    payload: &[u8],
+) -> Zeroizing<Vec<u8>> {
+    let mut part = Zeroizing::new(Vec::with_capacity(PART_HEADER + payload.len()));
+    part.extend_from_slice(set);
+    part.push(scheme);
+    part.extend_from_slice(&index.to_be_bytes());
+    part.extend_from_slice(&count.to_be_bytes());
+    part.extend_from_slice(payload);
+    part
 }
 
 fn slices(encoded: &[u8], weights: &[usize]) -> Vec<Zeroizing<Vec<u8>>> {
@@ -96,7 +105,13 @@ impl Part {
         let scheme = header[SET_BYTES];
         let index = u16::from_be_bytes([header[SET_BYTES + 1], header[SET_BYTES + 2]]);
         let count = u16::from_be_bytes([header[SET_BYTES + 3], header[SET_BYTES + 4]]);
-        (index < count && matches!(scheme, SPLIT | THRESHOLD)).then(|| Self {
+        // A count no writer of the scheme gives is not a part of this version.
+        let most = match scheme {
+            SPLIT => CARRIERS_MAX,
+            THRESHOLD => threshold::THRESHOLD_MAX,
+            _ => return None,
+        };
+        (index < count && usize::from(count) <= most).then(|| Self {
             set,
             scheme,
             index,
@@ -161,15 +176,8 @@ pub(crate) struct Assembled {
 /// sets are tried from the one with the most parts down (among equals, the one whose first photo
 /// was given first) and the first that is complete is the answer; when none is complete, the
 /// answer is the outcome of the first set tried.
-pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembled> {
-    parts.sort_by_key(|p| (p.identity(), p.index, p.source));
-    let mut sets: Vec<Vec<Part>> = Vec::new();
-    for part in parts {
-        match sets.last_mut() {
-            Some(set) if set[0].identity() == part.identity() => set.push(part),
-            _ => sets.push(vec![part]),
-        }
-    }
+pub(crate) fn assemble(parts: Vec<Part>) -> Option<Assembled> {
+    let mut sets = sets(parts);
     sets.sort_by_key(|set| {
         let first_photo = set.iter().map(|p| p.source).min();
         (std::cmp::Reverse(distinct(set)), first_photo)
@@ -193,13 +201,59 @@ pub(crate) fn assemble(mut parts: Vec<Part>) -> Option<Assembled> {
     answer
 }
 
+/// The parts by set, each set in the order of its parts' numbers.
+fn sets(mut parts: Vec<Part>) -> Vec<Vec<Part>> {
+    parts.sort_by_key(|p| (p.identity(), p.index, p.source));
+    let mut sets: Vec<Vec<Part>> = Vec::new();
+    for part in parts {
+        match sets.last_mut() {
+            Some(set) if set[0].identity() == part.identity() => set.push(part),
+            _ => sets.push(vec![part]),
+        }
+    }
+    sets
+}
+
 /// Parts of `set`, which is sorted by number, with the same part read twice counted once.
 fn distinct(set: &[Part]) -> usize {
     set.chunk_by(|a, b| a.index == b.index).count()
 }
 
-/// The outcome of the parts of one set, sorted by number.
-fn join(mut set: Vec<Part>) -> Assembly {
+/// Why the parts of one set do not give its message.
+enum Flawed {
+    Incomplete { found: usize, needed: usize },
+    Conflict,
+    Unsupported,
+}
+
+impl From<Flawed> for Assembly {
+    fn from(flawed: Flawed) -> Self {
+        match flawed {
+            Flawed::Incomplete { found, needed } => Self::Incomplete { found, needed },
+            Flawed::Conflict => Self::Conflict,
+            Flawed::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+/// The parts of one set after its checks: one part per number, in the order of the numbers, and
+/// how many the set needs.
+struct Checked {
+    parts: Vec<Part>,
+    needed: usize,
+}
+
+impl Checked {
+    fn payloads(&self) -> Vec<(usize, &[u8])> {
+        self.parts
+            .iter()
+            .map(|p| (usize::from(p.index), p.payload.as_slice()))
+            .collect()
+    }
+}
+
+/// Checks the parts of one set, sorted by number, before anything is made of them.
+fn check(mut set: Vec<Part>) -> Result<Checked, Flawed> {
     // The same part read twice (the same photo under two names) counts once; two different
     // parts under one number are a conflict, never a silent choice.
     let mut conflict = false;
@@ -208,51 +262,154 @@ fn join(mut set: Vec<Part>) -> Assembly {
         conflict |= same_place && a.payload != b.payload;
         same_place
     });
-    let Some(first) = set.first() else {
-        return Assembly::Unsupported;
-    };
+    let first = set.first().ok_or(Flawed::Unsupported)?;
     if conflict {
-        return Assembly::Conflict;
+        return Err(Flawed::Conflict);
     }
-    let (identity, scheme) = (first.set, first.scheme);
+    if first.scheme != THRESHOLD {
+        let needed = usize::from(first.count);
+        return Ok(Checked { parts: set, needed });
+    }
+    // What a k-of-n set needs is in its payloads, which are checked before they are believed.
     let payloads: Vec<(usize, &[u8])> = set
         .iter()
         .map(|p| (usize::from(p.index), p.payload.as_slice()))
         .collect();
-    // What a k-of-n set needs is in its payloads, which are checked before they are believed.
-    let needed = if scheme == THRESHOLD {
-        match threshold::form(&payloads) {
-            threshold::Form::Agreed { needed } => needed,
-            threshold::Form::Inconsistent => return Assembly::Conflict,
-            threshold::Form::Malformed => return Assembly::Unsupported,
-        }
-    } else {
-        usize::from(first.count)
+    let needed = match threshold::form(&payloads) {
+        threshold::Form::Agreed { needed } => needed,
+        threshold::Form::Inconsistent => return Err(Flawed::Conflict),
+        threshold::Form::Malformed => return Err(Flawed::Unsupported),
     };
-    if set.len() < needed {
-        return Assembly::Incomplete {
-            found: set.len(),
-            needed,
-        };
+    // No writer issues fewer photos than the set needs.
+    if set.iter().any(|p| usize::from(p.count) < needed) {
+        return Err(Flawed::Unsupported);
     }
-    let encoded = if scheme == THRESHOLD {
-        match threshold::join(&payloads, &identity) {
-            threshold::Joined::Message(encoded) => encoded,
-            threshold::Joined::Malformed => return Assembly::Unsupported,
-            // Enough authenticated parts that do not open together: report it, never "nothing".
-            threshold::Joined::Inconsistent | threshold::Joined::Unreadable => {
-                return Assembly::Conflict;
-            }
-        }
-    } else {
+    Ok(Checked { parts: set, needed })
+}
+
+/// The encoded message of a checked set.
+fn message(set: &Checked) -> Result<Zeroizing<Vec<u8>>, Flawed> {
+    let Some(first) = set.parts.first() else {
+        return Err(Flawed::Unsupported);
+    };
+    if set.parts.len() < set.needed {
+        return Err(Flawed::Incomplete {
+            found: set.parts.len(),
+            needed: set.needed,
+        });
+    }
+    if first.scheme != THRESHOLD {
         let mut joined = Zeroizing::new(Vec::new());
-        for part in &set {
+        for part in &set.parts {
             joined.extend_from_slice(&part.payload);
         }
-        joined
+        return Ok(joined);
+    }
+    match threshold::join(&set.payloads(), &first.set) {
+        threshold::Joined::Message(encoded) => Ok(encoded),
+        threshold::Joined::Malformed => Err(Flawed::Unsupported),
+        // Enough authenticated parts that do not open together: report it, never "nothing".
+        threshold::Joined::Inconsistent | threshold::Joined::Unreadable => Err(Flawed::Conflict),
+    }
+}
+
+/// The outcome of the parts of one set, sorted by number.
+fn join(set: Vec<Part>) -> Assembly {
+    let encoded = match check(set).and_then(|checked| message(&checked)) {
+        Ok(encoded) => encoded,
+        Err(flawed) => return flawed.into(),
     };
-    // The parts were whole and genuine, so a message that does not decode is another version's.
+    // The parts were whole and opened, so a message that does not decode is in a form this
+    // version does not read.
     Content::decode(&encoded).map_or(Assembly::Unsupported, Assembly::Complete)
+}
+
+/// Why the photos given are not one k-of-n set that a further photo can join.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoQuorum {
+    /// No part was read.
+    Nothing,
+    /// Parts of more than one set were read.
+    Several,
+    /// The set needs every photo: it has no spare pieces to make another from.
+    Split,
+    /// Fewer parts than the set needs.
+    Incomplete { found: usize, needed: usize },
+    /// The parts do not agree.
+    Conflict,
+    /// The parts are not in a form this version writes.
+    Unsupported,
+}
+
+/// The parts of one k-of-n set that opened: what a further photo of the set is made from.
+pub(crate) struct Quorum {
+    set: [u8; SET_BYTES],
+    parts: Vec<Part>,
+    /// Photos the set needs.
+    pub needed: usize,
+    /// The message the set opens to.
+    pub content: Content,
+}
+
+impl Quorum {
+    /// The numbers below this were issued, as far as the parts at hand know: the largest count
+    /// one of them declares, or one past the highest number among them.
+    pub(crate) fn issued(&self) -> u16 {
+        self.parts
+            .iter()
+            .map(|p| p.count.max(p.index + 1))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Each part's number and the photo it was read from, in the order of the numbers.
+    pub(crate) fn numbers(&self) -> impl Iterator<Item = (u16, usize)> {
+        self.parts.iter().map(|p| (p.index, p.source))
+    }
+
+    /// The part of photo `index` of this set, declared as one of `count` photos: its header and
+    /// the payload the set's own parts give for that number.
+    pub(crate) fn part(
+        &self,
+        index: u16,
+        count: u16,
+    ) -> Result<Zeroizing<Vec<u8>>, threshold::Refused> {
+        let payloads: Vec<(usize, &[u8])> = self
+            .parts
+            .iter()
+            .map(|p| (usize::from(p.index), p.payload.as_slice()))
+            .collect();
+        let payload = threshold::issue(&payloads, usize::from(index))?;
+        Ok(part(&self.set, THRESHOLD, (index, count), &payload))
+    }
+}
+
+/// The one k-of-n set among `parts`, opened: every check a reading makes, and the further
+/// demand that nothing else was read, since a set is changed only when it is certain which.
+pub(crate) fn quorum(parts: Vec<Part>) -> Result<Quorum, NoQuorum> {
+    let mut sets = sets(parts);
+    let set = sets.pop().ok_or(NoQuorum::Nothing)?;
+    if !sets.is_empty() {
+        return Err(NoQuorum::Several);
+    }
+    if set.first().is_none_or(|p| p.scheme != THRESHOLD) {
+        return Err(NoQuorum::Split);
+    }
+    let flaw = |flawed| match flawed {
+        Flawed::Incomplete { found, needed } => NoQuorum::Incomplete { found, needed },
+        Flawed::Conflict => NoQuorum::Conflict,
+        Flawed::Unsupported => NoQuorum::Unsupported,
+    };
+    let checked = check(set).map_err(flaw)?;
+    let encoded = message(&checked).map_err(flaw)?;
+    let content = Content::decode(&encoded).ok_or(NoQuorum::Unsupported)?;
+    let identity = checked.parts.first().map_or([0; SET_BYTES], |p| p.set);
+    Ok(Quorum {
+        set: identity,
+        needed: checked.needed,
+        parts: checked.parts,
+        content,
+    })
 }
 
 #[cfg(test)]
@@ -355,6 +512,26 @@ mod tests {
         unknown[PART_HEADER] = 0xff;
         let read = vec![Part::parse(&unknown).unwrap()];
         assert!(matches!(outcome(read), Some(Assembly::Unsupported)));
+    }
+
+    #[test]
+    fn counts_no_writer_gives_are_not_parts_of_this_version() {
+        let content = Content::text("abandon ability able").unwrap();
+        let with_count = |part: &[u8], count: u16| {
+            let mut part = part.to_vec();
+            part[SET_BYTES + 3..SET_BYTES + 5].copy_from_slice(&count.to_be_bytes());
+            part
+        };
+        // A k-of-n set has at most 16 photos, a split at most 256.
+        let parts = spread(&content, &[1, 1, 1], Some(2), &mut Counter(15)).unwrap();
+        assert!(Part::parse(&with_count(&parts[0], 16)).is_some());
+        assert!(Part::parse(&with_count(&parts[0], 17)).is_none());
+        let split = spread(&content, &[1, 1], None, &mut Counter(16)).unwrap();
+        assert!(Part::parse(&with_count(&split[0], 256)).is_some());
+        assert!(Part::parse(&with_count(&split[0], 257)).is_none());
+        // A set that needs two photos was never issued as one photo.
+        let lone = Part::parse(&with_count(&parts[0], 1)).unwrap();
+        assert!(matches!(outcome(vec![lone]), Some(Assembly::Unsupported)));
     }
 
     #[test]

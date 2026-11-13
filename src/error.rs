@@ -1,6 +1,7 @@
 //! Every refusal of the crate, with one stable code and one message each (CORE-23).
 
 use crate::algorithm::model::CostError;
+use crate::extend::SetError;
 use std::fmt;
 
 /// Why an operation was refused. A wrong password is not an error: reading returns `None`.
@@ -59,6 +60,8 @@ pub enum StegoError {
     Coding,
     /// The written photo did not read back with every password and hash.
     Verification,
+    /// The photos given are not one set that a further photo can join.
+    Set(SetError),
     /// A [`crate::protect::Secret`] has no room for the bytes pushed; nothing was written.
     SecretFull {
         /// Its capacity in bytes.
@@ -111,6 +114,7 @@ impl fmt::Display for StegoError {
             Self::Verification => {
                 "the written photo did not read back correctly; nothing was saved"
             }
+            Self::Set(reason) => return write!(f, "{reason}"),
             Self::SecretFull { capacity } => {
                 return write!(f, "a secret buffer of {capacity} bytes is full");
             }
@@ -120,6 +124,12 @@ impl fmt::Display for StegoError {
 }
 
 impl std::error::Error for StegoError {}
+
+impl From<SetError> for StegoError {
+    fn from(value: SetError) -> Self {
+        Self::Set(value)
+    }
+}
 
 impl From<CostError> for StegoError {
     fn from(value: CostError) -> Self {

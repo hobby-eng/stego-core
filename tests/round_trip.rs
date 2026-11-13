@@ -7,8 +7,8 @@
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use stego_core::{
-    Content, Cover, Mode, Password, Random, Reading, Secret, Settings, StegoError, WorkFactor, fit,
-    hide, reveal,
+    Addition, Content, Cover, Mode, Password, Place, Random, Reading, Secret, SetError, Settings,
+    StegoError, WorkFactor, extend, fit, hide, reveal,
 };
 
 /// A deterministic source for tests only (SplitMix64).
@@ -516,4 +516,296 @@ fn of_two_sets_under_one_password_the_larger_is_read_and_the_other_counted() {
     };
     assert_eq!(found.content().as_text(), Some("in two photos"));
     assert_eq!(found.report().other_sets, 0);
+}
+
+/// Hides `text` under `key` in fresh photos made from `seeds`, any `needed` of them enough when
+/// given, and returns the written photos.
+fn written(seeds: &[u64], text: &str, key: &Password, needed: Option<u8>) -> Vec<Cover> {
+    let covers: Vec<Cover> = seeds.iter().map(|&seed| photo(320, 240, seed)).collect();
+    let refs: Vec<&Cover> = covers.iter().collect();
+    let content = Content::text(text).unwrap();
+    let settings = Settings {
+        needed,
+        ..Settings::default()
+    };
+    let secret = Secret {
+        content: &content,
+        password: key,
+    };
+    let result = hide(&refs, &settings, secret, None, &mut TestRandom(seeds[0])).unwrap();
+    reread(result.files(), &(0..seeds.len()).collect::<Vec<_>>())
+}
+
+/// A further photo for the set in `photos`, made from a fresh photo of `seed`.
+fn added(
+    photos: &[&Cover],
+    seed: u64,
+    key: &Password,
+    place: Place,
+) -> Result<(Cover, stego_core::Membership), StegoError> {
+    let fresh = photo(320, 240, seed);
+    let addition = Addition {
+        photos,
+        photo: &fresh,
+        password: key,
+        behind: None,
+        place,
+    };
+    let extended = extend(&addition, &Settings::default(), &mut TestRandom(seed))?;
+    let set = extended.report().set;
+    Ok((Cover::new(extended.into_file()).unwrap(), set))
+}
+
+/// Two photos read again from their bytes, as a reader gets them.
+fn reread_pair(first: &Cover, second: &Cover) -> Vec<Cover> {
+    reread(&[first.bytes().to_vec(), second.bytes().to_vec()], &[0, 1])
+}
+
+#[test]
+fn a_set_of_three_of_five_photos_grows_to_seven() {
+    let key = password("correct horse battery");
+    let text = "three of five, then seven";
+    let old = written(&[50, 51, 52, 53, 54], text, &key, Some(3));
+    let before: Vec<Vec<u8>> = old.iter().map(|cover| cover.bytes().to_vec()).collect();
+    // A sixth photo from the first three; a seventh from three others, the sixth among them.
+    let (sixth, place) = added(&[&old[0], &old[1], &old[2]], 56, &key, Place::Next).unwrap();
+    assert_eq!(
+        (
+            place.number,
+            place.replaces,
+            place.needed,
+            place.numbers,
+            place.issued
+        ),
+        (6, false, 3, 4, 6)
+    );
+    let (seventh, place) = added(&[&sixth, &old[4], &old[1]], 58, &key, Place::Next).unwrap();
+    assert_eq!((place.number, place.replaces, place.issued), (7, false, 7));
+    // The five photos the set had are what they were.
+    for (cover, bytes) in old.iter().zip(&before) {
+        assert_eq!(cover.bytes(), bytes.as_slice());
+    }
+    // Every three of the seven open the message; no two do.
+    let mut all = old;
+    all.push(sixth);
+    all.push(seventh);
+    for a in 0..7 {
+        for b in a + 1..7 {
+            assert!(
+                matches!(
+                    reveal(&[&all[a], &all[b]], &key).unwrap(),
+                    Reading::Incomplete {
+                        found: 2,
+                        needed: 3
+                    }
+                ),
+                "photos {a} and {b} opened"
+            );
+            for c in b + 1..7 {
+                let Reading::Complete(found) = reveal(&[&all[c], &all[a], &all[b]], &key).unwrap()
+                else {
+                    panic!("photos {a}, {b} and {c} did not open");
+                };
+                assert_eq!(found.content().as_text(), Some(text));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_lost_photo_is_replaced_and_additions_made_apart_are_one_piece() {
+    let key = password("correct horse battery");
+    let text = "two of three";
+    let old = written(&[60, 61, 62], text, &key, Some(2));
+    // Photo 2 is lost: a new photo takes its number, made from the other two.
+    let (again, place) = added(&[&old[0], &old[2]], 63, &key, Place::Number(2)).unwrap();
+    assert_eq!(
+        (place.number, place.replaces, place.numbers, place.issued),
+        (2, true, 3, 3)
+    );
+    assert_eq!(
+        read_text(&reread_pair(&again, &old[0]), &key).as_deref(),
+        Some(text)
+    );
+    assert_eq!(
+        read_text(&reread_pair(&again, &old[2]), &key).as_deref(),
+        Some(text)
+    );
+    // The lost photo turns up: it and its replacement hold one piece and count once.
+    assert!(matches!(
+        reveal(&[&again, &old[1]], &key).unwrap(),
+        Reading::Incomplete {
+            found: 1,
+            needed: 2
+        }
+    ));
+    // Two photos added apart, from different old photos, take the same new number and hold
+    // the same piece: together they are one photo, not two that may be lost.
+    let (one, first) = added(&[&old[0], &old[1]], 64, &key, Place::Next).unwrap();
+    let (other, second) = added(&[&old[2], &old[1]], 65, &key, Place::Next).unwrap();
+    assert_eq!((first.number, second.number), (4, 4));
+    assert_ne!(one.bytes(), other.bytes());
+    assert!(matches!(
+        reveal(&[&one, &other], &key).unwrap(),
+        Reading::Incomplete {
+            found: 1,
+            needed: 2
+        }
+    ));
+    assert_eq!(
+        read_text(&reread_pair(&other, &old[2]), &key).as_deref(),
+        Some(text)
+    );
+}
+
+#[test]
+fn a_set_is_given_no_photo_unless_the_photos_are_one_whole_set() {
+    let key = password("correct horse battery");
+    let set = written(&[70, 71, 72], "two of three", &key, Some(2));
+    let other = written(&[73, 74, 75], "another two of three", &key, Some(2));
+    let split = written(&[76, 77], "every photo needed", &key, None);
+    let refused = |photos: &[&Cover], key: &Password, place: Place| {
+        added(photos, 78, key, place).map(|_| ()).unwrap_err()
+    };
+    let whole = [&set[0], &set[1], &set[2]];
+    // A wrong password, too few photos, two sets at once, a set that needs every photo.
+    let wrong = password("another public password");
+    assert_eq!(
+        refused(&whole, &wrong, Place::Next),
+        StegoError::Set(SetError::Nothing)
+    );
+    assert_eq!(
+        refused(&[&set[1]], &key, Place::Next),
+        StegoError::Set(SetError::Incomplete {
+            found: 1,
+            needed: 2
+        })
+    );
+    assert_eq!(
+        refused(&[&set[0], &set[1], &other[0], &other[1]], &key, Place::Next),
+        StegoError::Set(SetError::Several)
+    );
+    assert_eq!(
+        refused(&[&split[0], &split[1]], &key, Place::Next),
+        StegoError::Set(SetError::EveryPhotoNeeded)
+    );
+    // Numbers a set does not have.
+    for number in [0, 17] {
+        assert_eq!(
+            refused(&whole, &key, Place::Number(number)),
+            StegoError::Set(SetError::Number)
+        );
+    }
+    // The new photo is one of the photos given.
+    let addition = Addition {
+        photos: &whole,
+        photo: &set[0],
+        password: &key,
+        behind: None,
+        place: Place::Next,
+    };
+    let error = extend(&addition, &Settings::default(), &mut TestRandom(79)).unwrap_err();
+    assert_eq!(error, StegoError::DuplicatePhoto);
+    // The last number a set has, and then none is left.
+    let (last, place) = added(&whole, 80, &key, Place::Number(16)).unwrap();
+    assert_eq!(
+        (place.number, place.replaces, place.issued),
+        (16, false, 16)
+    );
+    assert_eq!(
+        refused(&[&last, &set[0]], &key, Place::Next),
+        StegoError::Set(SetError::Full)
+    );
+}
+
+#[test]
+fn a_set_with_a_decoy_grows_under_one_password_or_both() {
+    let covers = [
+        photo(800, 600, 84),
+        photo(800, 600, 85),
+        photo(800, 600, 86),
+    ];
+    let refs: Vec<&Cover> = covers.iter().collect();
+    let secret = Content::text("the secret behind").unwrap();
+    let decoy = Content::text(&"an ordinary note ".repeat(30)).unwrap();
+    let (secret_key, decoy_key) = (password("secret password 1"), password("decoy password 22"));
+    let settings = Settings {
+        mode: Mode::Decoy,
+        needed: Some(2),
+        ..Settings::default()
+    };
+    let result = hide(
+        &refs,
+        &settings,
+        Secret {
+            content: &secret,
+            password: &secret_key,
+        },
+        Some(Secret {
+            content: &decoy,
+            password: &decoy_key,
+        }),
+        &mut TestRandom(87),
+    )
+    .unwrap();
+    let old = reread(result.files(), &[0, 1, 2]);
+    let whole = [&old[0], &old[1], &old[2]];
+    let add = |seed: u64, password: &Password, behind: Option<&Password>| {
+        let fresh = photo(800, 600, seed);
+        let addition = Addition {
+            photos: &whole,
+            photo: &fresh,
+            password,
+            behind,
+            place: Place::Next,
+        };
+        extend(&addition, &Settings::default(), &mut TestRandom(seed))
+    };
+    // Both passwords: the new photo carries its part of the decoy and of the secret.
+    let both = add(88, &decoy_key, Some(&secret_key)).unwrap();
+    assert_eq!(both.report().set.number, 4);
+    assert_eq!(both.report().behind.map(|place| place.number), Some(4));
+    let both = Cover::new(both.into_file()).unwrap();
+    let pair = reread_pair(&both, &old[1]);
+    assert!(
+        read_text(&pair, &decoy_key)
+            .unwrap()
+            .starts_with("an ordinary note")
+    );
+    assert_eq!(
+        read_text(&pair, &secret_key).as_deref(),
+        Some("the secret behind")
+    );
+    // The decoy's password alone: the decoy grows, the secret stays in the photos that had it.
+    let alone = add(89, &decoy_key, None).unwrap();
+    assert_eq!(alone.report().behind, None);
+    let alone = Cover::new(alone.into_file()).unwrap();
+    let pair = reread_pair(&alone, &old[2]);
+    assert!(
+        read_text(&pair, &decoy_key)
+            .unwrap()
+            .starts_with("an ordinary note")
+    );
+    assert!(matches!(
+        reveal(&[&alone, &old[2]], &secret_key).unwrap(),
+        Reading::Incomplete {
+            found: 1,
+            needed: 2
+        }
+    ));
+    // The secret's password cannot write a photo by itself, and a password that opens nothing
+    // behind the decoy is no second password.
+    assert_eq!(
+        add(90, &secret_key, None).unwrap_err(),
+        StegoError::Set(SetError::DecoyPassword)
+    );
+    let stranger = password("another public password");
+    assert_eq!(
+        add(91, &decoy_key, Some(&stranger)).unwrap_err(),
+        StegoError::Set(SetError::NothingBehind)
+    );
+    assert_eq!(
+        add(92, &decoy_key, Some(&decoy_key)).unwrap_err(),
+        StegoError::Set(SetError::NothingBehind)
+    );
 }

@@ -308,6 +308,133 @@ fn open(parsed: &Parsed<'_>, set: &[u8]) -> Option<Joined> {
     Some(Joined::Message(plain))
 }
 
+/// Why a set cannot be given the photo asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refused {
+    /// A payload is not in the form this version writes.
+    Malformed,
+    /// The payloads are not parts of one message: their fields differ, or a piece or a key
+    /// share beyond the first k does not lie with those k.
+    Inconsistent,
+    /// Fewer payloads than the set needs.
+    TooFew,
+    /// The number is not one a photo of a set can have.
+    Number,
+}
+
+/// The payload of photo `index` of the set that the `(photo number, payload)` pairs belong to:
+/// its piece of the ciphertext, made from any k pieces, and its share of the key, which is the
+/// same polynomials at this photo's point. The ciphertext, its nonce and its length stay what
+/// they are and nothing is encrypted anew, so the payload of a number depends on the set alone:
+/// made twice, from whichever photos, it is the same bytes. A number that is among the payloads
+/// gets its own payload back.
+///
+/// Whether the payloads are genuine is not checked here; the caller opens the set first.
+pub(crate) fn issue(
+    payloads: &[(usize, &[u8])],
+    index: usize,
+) -> Result<Zeroizing<Vec<u8>>, Refused> {
+    let parsed = parse(payloads).map_err(|flaw| match flaw {
+        Flaw::Malformed => Refused::Malformed,
+        Flaw::Inconsistent => Refused::Inconsistent,
+    })?;
+    let k = usize::from(parsed.needed);
+    if parsed.parts.len() < k {
+        return Err(Refused::TooFew);
+    }
+    // A set has at most `THRESHOLD_MAX` numbers, so the share's number fits its byte.
+    let number = u8::try_from(index + 1)
+        .ok()
+        .filter(|_| index < THRESHOLD_MAX)
+        .ok_or(Refused::Number)?;
+    let pieces: Vec<(usize, &[u8])> = parsed
+        .parts
+        .iter()
+        .map(|&(i, _, shard)| (i, shard))
+        .collect();
+    let code = Code::new(k).map_err(|_| Refused::Malformed)?;
+    if pieces.len() > k
+        && !code
+            .consistent(&pieces)
+            .map_err(|_| Refused::Inconsistent)?
+    {
+        return Err(Refused::Inconsistent);
+    }
+    // The key shares beyond the first k must lie on the polynomials those k fix. Opening the
+    // message shows only that all the shares agree at the point 0, which does not prove it.
+    let (first, further) = parsed.parts.split_at(k);
+    let sources: Vec<&[u8]> = first.iter().map(|&(_, share, _)| share).collect();
+    for &(_, share, _) in further {
+        let point = share.first().copied().unwrap_or(0);
+        if !same(&share_at(&sources, point), share) {
+            return Err(Refused::Inconsistent);
+        }
+    }
+    if let Some(&(_, payload)) = payloads.iter().find(|&&(i, _)| i == index) {
+        return Ok(Zeroizing::new(payload.to_vec()));
+    }
+    let data = code.rebuild(&pieces).map_err(|_| Refused::Inconsistent)?;
+    let data: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+    let shard = code.piece(&data, index).map_err(|_| Refused::Number)?;
+    let share = share_at(&sources, number);
+    let length = u32::try_from(parsed.sealed_length).map_err(|_| Refused::Malformed)?;
+    let mut payload = Zeroizing::new(Vec::with_capacity(PAYLOAD_OVERHEAD + shard.len()));
+    payload.push(parsed.needed);
+    payload.extend_from_slice(&(SHARE_BYTES as u16).to_be_bytes());
+    payload.extend_from_slice(&share);
+    payload.extend_from_slice(parsed.nonce);
+    payload.extend_from_slice(&length.to_be_bytes());
+    payload.extend_from_slice(&shard);
+    Ok(payload)
+}
+
+/// The share at point `x` of the polynomials that `shares` lie on, each share a point and then
+/// one value per key byte: Lagrange's formula byte by byte, with the field arithmetic of
+/// vsss-rs, which shared the key. The points of `shares` are different; at one of them the
+/// result is that share.
+pub(crate) fn share_at(shares: &[&[u8]], x: u8) -> Zeroizing<Vec<u8>> {
+    let point = |share: &[u8]| Gf256(share.first().copied().unwrap_or(0));
+    let target = Gf256(x);
+    let mut out = Zeroizing::new(vec![0; SHARE_BYTES]);
+    if let Some(first) = out.first_mut() {
+        *first = x;
+    }
+    for (position, share) in shares.iter().enumerate() {
+        // This share's weight, Π (x − x_m) / (x_j − x_m) over the other shares; the points are
+        // public.
+        let own = point(share);
+        let (mut numerator, mut denominator) = (Gf256(1), Gf256(1));
+        for (other, share) in shares.iter().enumerate() {
+            if other != position {
+                numerator *= target - point(share);
+                denominator *= own - point(share);
+            }
+        }
+        let weight = numerator * inverse(denominator);
+        for (sum, &value) in out.iter_mut().zip(share.iter()).skip(1) {
+            *sum ^= (Gf256(value) * weight).0;
+        }
+    }
+    out
+}
+
+/// The inverse of a nonzero element: its 254th power, by the chain of squarings and
+/// multiplications vsss-rs's own inversion takes, with its constant-time multiplication. Its
+/// division panics on zero and `Gf256::pow` of version 6.0.1 multiplies as integers, so neither
+/// is used; zero gives zero here.
+fn inverse(element: Gf256) -> Gf256 {
+    let mut power = element;
+    for _ in 0..6 {
+        power = power * power * element;
+    }
+    power * power
+}
+
+/// Whether two shares are the same, looking at every byte.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |differs, (x, y)| differs | (x ^ y)) == 0
+}
+
 fn aad(set: &[u8]) -> Vec<u8> {
     [AAD_LABEL, set].concat()
 }
@@ -442,6 +569,84 @@ mod tests {
             form(&pairs(&parts, &[0, 1])),
             Form::Agreed { needed: 2 }
         ));
+    }
+
+    #[test]
+    fn a_set_of_three_of_five_grows_to_seven() {
+        let set = [11; 16];
+        let mut parts = split(MESSAGE, 3, 5, &set, &mut Counter(15)).unwrap();
+        // Photo 5 from the first three photos; photo 6 from three others, the new one among them.
+        let fifth = issue(&pairs(&parts, &[0, 1, 2]), 5).unwrap();
+        parts.push(fifth);
+        let sixth = issue(&pairs(&parts, &[5, 3, 1]), 6).unwrap();
+        parts.push(sixth);
+        // Every three of the seven open the message and no two do.
+        for a in 0..7 {
+            for b in a + 1..7 {
+                assert!(matches!(
+                    join(&pairs(&parts, &[a, b]), &set),
+                    Joined::Unreadable
+                ));
+                for c in b + 1..7 {
+                    let Joined::Message(joined) = join(&pairs(&parts, &[c, a, b]), &set) else {
+                        panic!("{a} {b} {c} did not join");
+                    };
+                    assert_eq!(&joined[..], MESSAGE);
+                }
+            }
+        }
+        // All seven together agree, pieces and shares.
+        assert!(matches!(
+            join(&pairs(&parts, &[0, 1, 2, 3, 4, 5, 6]), &set),
+            Joined::Message(_)
+        ));
+        assert!(issue(&pairs(&parts, &[6, 5, 4, 3, 2, 1, 0]), 7).is_ok());
+    }
+
+    #[test]
+    fn the_payload_of_a_number_depends_on_the_set_alone() {
+        let set = [12; 16];
+        let parts = split(MESSAGE, 3, 5, &set, &mut Counter(16)).unwrap();
+        // A lost photo made again from the other four: the bytes it had.
+        assert_eq!(issue(&pairs(&parts, &[4, 0, 3, 1]), 2).unwrap(), parts[2]);
+        // Two additions made apart, from different photos, give one and the same payload.
+        assert_eq!(
+            issue(&pairs(&parts, &[0, 1, 2]), 5).unwrap(),
+            issue(&pairs(&parts, &[4, 3, 2]), 5).unwrap()
+        );
+        // A number that is among the payloads is given back as it is.
+        assert_eq!(issue(&pairs(&parts, &[0, 1, 2]), 1).unwrap(), parts[1]);
+    }
+
+    #[test]
+    fn a_set_gets_no_photo_from_parts_that_do_not_belong_together() {
+        let set = [13; 16];
+        let parts = split(MESSAGE, 3, 5, &set, &mut Counter(17)).unwrap();
+        assert_eq!(issue(&pairs(&parts, &[0, 1]), 5), Err(Refused::TooFew));
+        assert_eq!(issue(&pairs(&parts, &[0, 1, 2]), 16), Err(Refused::Number));
+        // A fourth photo whose key share was changed in one byte: the pieces still agree and
+        // the first three alone would open the message, but the share is off its polynomial.
+        let mut forged = parts[3].to_vec();
+        forged[SHARE.start + 9] ^= 1;
+        let given = [
+            (0, parts[0].as_slice()),
+            (1, parts[1].as_slice()),
+            (2, parts[2].as_slice()),
+            (3, forged.as_slice()),
+        ];
+        assert_eq!(issue(&given, 5), Err(Refused::Inconsistent));
+        // The same with a changed piece.
+        let mut forged = parts[3].to_vec();
+        if let Some(last) = forged.last_mut() {
+            *last ^= 1;
+        }
+        let given = [
+            (0, parts[0].as_slice()),
+            (1, parts[1].as_slice()),
+            (2, parts[2].as_slice()),
+            (3, forged.as_slice()),
+        ];
+        assert_eq!(issue(&given, 5), Err(Refused::Inconsistent));
     }
 
     #[test]

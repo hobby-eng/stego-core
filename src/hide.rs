@@ -45,15 +45,15 @@ impl HideResult {
 }
 
 /// What one photo's write produced, before its report.
-struct Written {
-    bytes: Vec<u8>,
-    sites: usize,
-    nonzero_ac: usize,
-    changes: usize,
-    free: Option<usize>,
-    coded_bits: usize,
-    secret: RecordReport,
-    decoy: Option<RecordReport>,
+pub(crate) struct Written {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) sites: usize,
+    pub(crate) nonzero_ac: usize,
+    pub(crate) changes: usize,
+    pub(crate) free: Option<usize>,
+    pub(crate) coded_bits: usize,
+    pub(crate) secret: RecordReport,
+    pub(crate) decoy: Option<RecordReport>,
 }
 
 /// The photos chosen for writing: between 1 and [`CARRIERS_MAX`], each a different file. The
@@ -252,7 +252,7 @@ pub(crate) fn write_plain(
     write_standard(cover, &keys, &Settings::default(), plain, random).map(|written| written.bytes)
 }
 
-fn write_standard(
+pub(crate) fn write_standard(
     cover: &Cover,
     keys: &Keys,
     settings: &Settings,
@@ -312,11 +312,11 @@ fn write_standard(
 }
 
 /// The keys and parts of one photo in the decoy mode.
-struct Pair<'a> {
-    decoy_keys: &'a Keys,
-    decoy_part: &'a [u8],
+pub(crate) struct Pair<'a> {
+    pub(crate) decoy_keys: &'a Keys,
+    pub(crate) decoy_part: &'a [u8],
     /// The secret's keys and part, when one hides behind the decoy.
-    behind: Option<(&'a Keys, &'a [u8])>,
+    pub(crate) behind: Option<(&'a Keys, &'a [u8])>,
 }
 
 /// The decoy's body: its own size, padded up to the photo's recommended room. The padding
@@ -333,7 +333,7 @@ fn decoy_body(sites: &Sites, part: usize) -> Result<usize, StegoError> {
     Ok(own.max(padded))
 }
 
-fn write_decoy(
+pub(crate) fn write_decoy(
     cover: &Cover,
     settings: &Settings,
     pair: &Pair<'_>,

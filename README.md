@@ -37,6 +37,8 @@ A message can be spread over up to 256 photos in two ways:
 
 Both ways work in the decoy mode too, for the decoy and the secret alike.
 
+A set of which any k photos are enough can be given another photo later, in place of a lost one or as one more, from any k of its photos; the others are not touched. A set that needs every photo cannot grow.
+
 ## Passwords
 
 Each password is stretched with Argon2id. The person may raise two numbers: the **PIM**, from 0 to 1,023, multiplies the passes (3 × (PIM + 1)), and the **memory level**, from 0 to 29, chooses the memory: 128, 192, 256, 384, 512, 768 MiB, 1 GiB and so on, up to 3 TiB at level 29. Neither number is stored in the photo: whoever reads must enter the same ones. Level 0 with PIM 0 is the default, and phones and browsers can open it; a browser cannot go above about 2 GiB (level 8).

@@ -65,6 +65,10 @@ pub fn startup_self_test() -> SelfTest {
             shamir,
         ),
         (
+            "Shamir: the shares of two further photos follow from any three, as computed by hand",
+            further_shares,
+        ),
+        (
             "Shamir and dispersal: 2 of 3 open, 1 does not (round trip)",
             threshold,
         ),
@@ -234,22 +238,43 @@ fn reed_solomon() -> bool {
 /// f(x) = s + a1·x + a2·x² over GF(2^8) with the AES polynomial 0x11B, a1 = 01 02 03 04 and
 /// a2 = 10 20 30 40; each share is its number, then one value per secret byte, as vsss-rs
 /// writes them.
+const HAND_SHARES: [[u8; 5]; 5] = [
+    [0x01, 0x42, 0xe8, 0x33, 0xbb],
+    [0x02, 0x11, 0x4e, 0xc6, 0xec],
+    [0x03, 0x00, 0x6c, 0xf5, 0xa8],
+    [0x04, 0x4c, 0xf4, 0x21, 0x83],
+    [0x05, 0x5d, 0xd6, 0x12, 0xc7],
+];
+
 fn shamir() -> bool {
     let secret = [0x53, 0xca, 0x00, 0xff];
-    let shares: [[u8; 5]; 5] = [
-        [0x01, 0x42, 0xe8, 0x33, 0xbb],
-        [0x02, 0x11, 0x4e, 0xc6, 0xec],
-        [0x03, 0x00, 0x6c, 0xf5, 0xa8],
-        [0x04, 0x4c, 0xf4, 0x21, 0x83],
-        [0x05, 0x5d, 0xd6, 0x12, 0xc7],
-    ];
     let open = |pick: &[usize]| {
-        let chosen: Vec<Vec<u8>> = pick.iter().map(|&i| shares[i].to_vec()).collect();
+        let chosen: Vec<Vec<u8>> = pick.iter().map(|&i| HAND_SHARES[i].to_vec()).collect();
         vsss_rs::Gf256::combine_bytes(&chosen).ok()
     };
     open(&[0, 1, 2]).as_deref() == Some(&secret[..])
         && open(&[4, 1, 3]).as_deref() == Some(&secret[..])
         && open(&[0, 1]).as_deref() != Some(&secret[..])
+}
+
+/// A photo added to a set later gets the share of its own number, worked out from any three
+/// shares at hand. The same polynomial at the points 6 and 7 was computed apart from this crate
+/// (twice, by two programs): 06 0E 70 E7 90 and 07 1F 52 D4 D4. A share that is at hand must come
+/// out as it is.
+fn further_shares() -> bool {
+    let at = |pick: [usize; 3], point: u8| {
+        let chosen: Vec<&[u8]> = pick.iter().map(|&i| &HAND_SHARES[i][..]).collect();
+        let share = crate::threshold::share_at(&chosen, point);
+        share.get(..5).map(<[u8]>::to_vec)
+    };
+    let sixth = [0x06, 0x0e, 0x70, 0xe7, 0x90];
+    let seventh = [0x07, 0x1f, 0x52, 0xd4, 0xd4];
+    at([0, 1, 2], 6).as_deref() == Some(&sixth[..])
+        && at([4, 2, 1], 6).as_deref() == Some(&sixth[..])
+        && at([0, 1, 2], 7).as_deref() == Some(&seventh[..])
+        && at([3, 0, 4], 7).as_deref() == Some(&seventh[..])
+        && at([0, 1, 2], 4).as_deref() == Some(&HAND_SHARES[3][..])
+        && at([0, 1, 2], 2).as_deref() == Some(&HAND_SHARES[1][..])
 }
 
 fn threshold() -> bool {
