@@ -1,13 +1,6 @@
-//! UERD costs (Guo, Ni, Su, Chen and Shi, "Using statistical image model for JPEG
-//! steganography: uniform embedding revisited", IEEE TIFS 10(12):2669–2680, 2015) for ±1 changes.
-//!
-//! The cost of changing mode `(u, v)` of block `b` is the quantization step `q_uv` divided by the
-//! block's complexity: its energy `E_b = Σ |c| · q` over the block's AC modes, plus a quarter of
-//! the energies of its eight neighbouring blocks (outside the image the edge blocks are repeated,
-//! as in the reference implementations). The DC step is replaced by `(q_01 + q_10) / 2`. A change
-//! of +1 and of −1 cost the same; a block whose complexity is zero gets an infinite cost. Equal to
-//! conseal 2026.11 (`conseal.uerd.compute_cost_adjusted`) on four public photos, interior and edge
-//! blocks and DC.
+//! UERD costs (Guo, Ni, Su, Chen, Shi, TIFS 2015) for ±1 changes: the quantization step over the
+//! block's energy plus a quarter of its eight neighbours'. A block with zero energy costs infinity.
+//! Matches conseal on four public photos.
 
 use crate::algorithm::juniward::check_positions;
 use crate::algorithm::model::{BLOCK, CostError, CostModel, Costs, DctPlane, Permitted};

@@ -66,13 +66,9 @@ struct Limits {
     maximum: usize,
 }
 
-/// The rooms of `secret` and `decoy` in `covers` under `settings`.
-///
-/// # Errors
-///
-/// [`StegoError::Carriers`] for no photos or too many, [`StegoError::DuplicatePhoto`] for the
-/// same photo twice (as writing would refuse it), [`StegoError::DecoyChoice`] when the decoy
-/// does not match the mode, [`StegoError::Threshold`] for an impossible threshold.
+/// How much room `secret` and `decoy` have in `covers` under `settings`. Fails for the same
+/// requests writing would refuse: no photos or too many, a duplicate photo, a decoy that doesn't
+/// match the mode, or an impossible threshold.
 pub fn fit(
     covers: &[&Cover],
     settings: &Settings,

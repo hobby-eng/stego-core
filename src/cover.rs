@@ -74,13 +74,9 @@ pub struct Capacity {
     pub memory_bytes: u64,
 }
 
-/// About how much memory hiding in or reading the photo in `bytes` would take, from its header
-/// alone, so that a host can warn or decline before [`Cover::new`] decodes it. An upper bound:
-/// 12 MP about 0.8 GB, 48 MP about 2.9 GB (measured jobs took 0.46 and 1.77 GB).
-///
-/// # Errors
-///
-/// [`StegoError::Jpeg`] or [`StegoError::JpegProfile`] when the header cannot be read.
+/// Roughly how much memory hiding in or reading this photo would take, from its header alone, so a
+/// host can warn before decoding it. An upper bound: about 0.8 GB for 12 MP and 2.9 GB for 48 MP.
+/// Fails with [`StegoError::Jpeg`] or [`StegoError::JpegProfile`] when the header is unreadable.
 pub fn memory_estimate(bytes: &[u8]) -> Result<u64, StegoError> {
     crate::jpeg::estimate_file(bytes)
 }
@@ -93,13 +89,8 @@ pub struct Cover {
 }
 
 impl Cover {
-    /// Parses `bytes` and checks that the photo can be rewritten without any other change.
-    ///
-    /// # Errors
-    ///
-    /// [`StegoError::Jpeg`], [`StegoError::JpegProfile`], [`StegoError::TrailingData`],
-    /// [`StegoError::NotReproducible`] for a photo this crate cannot use;
-    /// [`StegoError::Memory`] when the system does not give the memory to decode it.
+    /// Parses `bytes` and checks that the photo can be rewritten without any other change. Fails for a
+    /// photo this crate cannot use, or with [`StegoError::Memory`] when there is no memory to decode it.
     pub fn new(bytes: Vec<u8>) -> Result<Self, StegoError> {
         let jpeg = Jpeg::read(bytes)?;
         let context = context(&jpeg)?;

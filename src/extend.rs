@@ -1,16 +1,7 @@
-//! A further photo for a set of which any k photos are enough: one that takes the number of a
-//! lost photo, or one more under a new number.
-//!
-//! The set's ciphertext, its nonce and its key stay what they are, and the photos already
-//! written are not touched. The new photo's piece of the ciphertext is made from any k pieces
-//! and its share of the key is the same polynomials at the new photo's point, worked out from
-//! any k shares (`crate::threshold::issue`). So the part of a number depends on the set alone:
-//! two photos made for one number, at different times and from different photos, hold the same
-//! part and count as one.
-//!
-//! Nothing is written unless the photos given open, as one set and no other, to a whole message.
-//! The new photo is then read back together with k − 1 of the old ones, which cannot open
-//! without it, before it is returned.
+//! A further photo for a k-of-n set: one in place of a lost photo, or one more under a new number.
+//! Nothing in the set changes; the new photo's piece and key share come from any k photos, so the
+//! part for a number is always the same and two copies count as one. It is read back with k − 1
+//! old photos before it is returned.
 
 use crate::cover::Cover;
 use crate::hide::{Pair, Written, write_decoy, write_standard};
@@ -292,18 +283,9 @@ impl Source {
     }
 }
 
-/// Gives a set of which any k photos are enough a further photo.
-///
-/// `settings` gives the cost model, the site rule and the threads, as for hiding; the mode and
-/// the threshold are the set's own.
-///
-/// # Errors
-///
-/// [`StegoError::Carriers`] for no photos or too many, [`StegoError::DuplicatePhoto`] when the
-/// new photo is one of the photos given, [`StegoError::Set`] when the photos are not one whole
-/// set that can grow, [`StegoError::MessageLong`] or [`StegoError::HiddenLong`] when the new
-/// photo has no room for its part, [`StegoError::Verification`] when the new photo does not
-/// read back with the others.
+/// Gives a k-of-n set a further photo. `settings` supplies the cost model, site rule and threads;
+/// mode and threshold come from the set. Fails when the photos are wrong or are not one set that
+/// can grow, when the new photo has no room, or when it doesn't read back with the others.
 pub fn extend(
     addition: &Addition<'_>,
     settings: &Settings,

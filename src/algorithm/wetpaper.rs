@@ -1,16 +1,7 @@
-//! The hidden record of the decoy mode: a wet-paper code on the second bit of |q|.
-//!
-//! The decoy's binary coder decides which coefficients change; a change at a coefficient with
-//! |q| >= 2 may go either way, and the two results differ in the second bit of |q|. The hidden
-//! record's bits are the keyed syndrome `H · b`, where `b` is the second bit of |q| at every site
-//! and column `j` of `H` comes from the hidden key and the site's position alone. The sender knows
-//! which sites are free (changed, two-way) and solves `H_free · x = m ⊕ H_rest · b_rest` over GF(2),
-//! taking a uniformly random solution (free variables from a keyed stream), so that with a uniform
-//! message the free bits are uniform, like the coin of a file without a hidden record. The reader
-//! computes the syndrome over all sites with the hidden key. Fridrich, Goljan, Soukal, "Perturbed
-//! quantization steganography with wet paper codes" (ACM MM&Sec 2004) is the wet-paper idea; the
-//! layer on the decoy's directions is the double-layered ±1 scheme of Zhang, Zhang, Wang (IEEE SPL
-//! 14(11), 2007) under a separate key.
+//! The hidden record of the decoy mode: a wet-paper code (Fridrich, Goljan, Soukal 2004) on the
+//! second bit of |q| at the sites the decoy changes. The sender picks a random solution among all
+//! that give the message, so the changed bits look like coin flips, as in a file without a hidden
+//! record.
 
 /// The second bit of |q|: `⌊|q| / 2⌋ mod 2`. The two neighbours of any |q| >= 2 differ in it.
 #[must_use]

@@ -1,9 +1,6 @@
-//! Baseline JPEG at the level of quantized coefficients: every scan is decoded into
-//! coefficients and encoded again with the file's own tables, so that changed coefficients are
-//! written without touching any other byte of the file.
-//!
-//! A file is admitted only when encoding its unchanged coefficients gives back its exact bytes:
-//! a writer that pads, stuffs or orders symbols differently would otherwise leave a trace.
+//! Baseline JPEG at the level of quantized coefficients, re-encoded with the file's own tables, so
+//! changed coefficients are written without touching any other byte. A file is admitted only when
+//! its unchanged coefficients encode back to its exact bytes; otherwise a rewrite would show.
 
 mod bits;
 mod huffman;

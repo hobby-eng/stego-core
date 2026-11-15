@@ -322,14 +322,9 @@ pub(crate) enum Refused {
     Number,
 }
 
-/// The payload of photo `index` of the set that the `(photo number, payload)` pairs belong to:
-/// its piece of the ciphertext, made from any k pieces, and its share of the key, which is the
-/// same polynomials at this photo's point. The ciphertext, its nonce and its length stay what
-/// they are and nothing is encrypted anew, so the payload of a number depends on the set alone:
-/// made twice, from whichever photos, it is the same bytes. A number that is among the payloads
-/// gets its own payload back.
-///
-/// Whether the payloads are genuine is not checked here; the caller opens the set first.
+/// The payload of photo `index` of a set: its ciphertext piece, made from any k pieces, and its key
+/// share. Nothing is re-encrypted, so the same number always gets the same bytes. The caller must
+/// open the set first; payloads are not checked here.
 pub(crate) fn issue(
     payloads: &[(usize, &[u8])],
     index: usize,

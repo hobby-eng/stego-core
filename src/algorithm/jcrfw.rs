@@ -1,37 +1,7 @@
-//! J-CRFW and J-CRF costs (Pan, Ni, Liu, Su, Huang, "Efficient JPEG image steganography using
-//! pairwise conditional random field model", Signal Processing 221:109493, 2024), written from
-//! the paper; no author code exists publicly. A research prototype next to J-UNIWARD and J-MiPOD.
-//!
-//! The model is J-MiPOD's Gaussian model of the quantized coefficients extended with the
-//! correlation `ϱ` between the same mode of horizontally and vertically neighbouring blocks.
-//! Detectability is the energy of a pairwise CRF (eq. 11, 16, 22, 24): per coefficient
-//! `β²/σ⁴`, per edge `[β_i²/σ_i⁴ + β_j²/σ_j⁴ + 2ϱ²β_iβ_j/(σ_i²σ_j²)] / (1 − ϱ²)²`, with `σ²` in
-//! quantization steps. Minimizing it at payload `Σ H3(β) = R` gives (eq. 27–29)
-//! `β_i · FI_i = λ · log2(1/β_i − 2)` with the effective information
-//! `FI_i = w_u [w_b/σ_i⁴ + Σ_j w_ij/(σ_i⁴(1−ϱ²)²) + Σ_j w_ij ϱ²/(σ_i²σ_j²(1−ϱ²)²) · β_j/β_i]`
-//! over the existing neighbours `j` (the common factor 2 is dropped; it only rescales `λ`).
-//! The last term couples neighbours, so the paper iterates: start with `β_j/β_i = 1` (0 for a
-//! neighbour that cannot change), solve as J-MiPOD does, update the ratios, repeat. Each update
-//! lowers the energy at the payload (a majorization step). The paper reports that three updates
-//! usually suffice; by default we update until the `β` map moves by less than 1e-6 of its total
-//! (about a dozen updates on photos, at most 60) and [`JCrfw::with_iterations`] sets a fixed
-//! count. Updates before the last use the entropy table only; the last one is exact.
-//!
-//! J-CRF has all weights 1. J-CRFW (Sec. 4.2) weights each block by its summed S-UNIWARD
-//! costs, each edge by the mean of its two blocks and the last zigzag modes by 5 (`weights.rs`).
-//! Costs are `ρ = ln(1/β − 2)` (eq. 30), as in J-MiPOD.
-//!
-//! Tiles and sparse decoding are shared with J-MiPOD; the S-UNIWARD weights follow the
-//! convention of the reference code and conseal; the frozen-ratio updates use J-MiPOD's payload
-//! solver. The window arithmetic sums the residual directly, costs stay finite and exact where
-//! `β` underflows, and [`Solution`] reports diagnostics (energy, the residual of the original
-//! optimality condition). An exact coordinate solver of every position is not used: with the
-//! same weights it moved the `β` map of photos by at most 5e-6 of its total, at 2 to 30 times
-//! the CPU time.
-//!
-//! Choices the paper leaves open, all ours: pixels decoded without rounding or +128, as in
-//! J-MiPOD here; an edge exists only between blocks inside the image; a neighbour that is not
-//! selected or is wet has `β = 0`; the stopping rule above; [`FrequencyProfile::Auto`].
+//! J-CRFW and J-CRF costs (Pan et al., Signal Processing 221:109493, 2024), written from the paper
+//! since no author code is public. J-MiPOD's model plus the correlation between the same mode of
+//! neighbouring blocks; neighbours couple, so the solver repeats J-MiPOD's solve until the change
+//! map settles. The formulas and the choices the paper leaves open are in docs/TECHNICAL.md.
 
 #[cfg(test)]
 mod reference;
@@ -146,20 +116,10 @@ impl JCrfw {
         self
     }
 
-    /// Change probabilities, costs and diagnostics per position.
-    ///
-    /// The payload is held to `1e-9 · max(R, 1)` bits; in the rare case that the exact passes
-    /// run out first, to `max(1 bit, 1e-6 R)` (J-MiPOD's requirement 4.6), and
-    /// [`Solution::entropy_bits`] shows the value reached.
-    ///
-    /// Errors: [`CostError::Shape`] or [`CostError::Quantization`] for an invalid plane,
-    /// [`CostError::Permission`] for mismatched, out-of-range or repeated positions,
-    /// [`CostError::Unsupported`] for one-direction permissions, [`CostError::Payload`] for a
-    /// payload that is not finite, negative or at least the ternary capacity of the permitted
-    /// positions. Zero payload returns `λ = 0`, `β = 1e-300` and `ρ ≈ 690.8` for permitted
-    /// positions, as J-MiPOD does.
-    ///
-    /// Working memory is about 24 bytes per position plus the per-block terms and bounded tiles.
+    /// Change probabilities, costs and diagnostics per position. The payload is met within
+    /// `1e-9 · max(R, 1)` bits (see [`Solution::entropy_bits`]); zero payload gives `λ = 0`.
+    /// Errors: an invalid plane, wrong positions, one-direction permissions, or a payload that is not
+    /// finite or reaches the ternary capacity. Uses about 24 bytes per position.
     pub fn change_probabilities(
         &self,
         plane: &DctPlane,
@@ -393,12 +353,8 @@ impl<'a> Coupling<'a> {
         }
     }
 
-    /// The coupled updates and the solution.
-    ///
-    /// Every update but the last solves `λ` and `β` from the entropy table only; it stops once
-    /// the map moves by less than `CONVERGED` of its total, or after `fixed − 1` updates. The
-    /// last update refreshes `FI` and runs the exact solver. The costs are then solved once
-    /// more without the cap of the payload search (`final_cost`), and `β` follows from them.
+    /// The coupled updates. All but the last use only the entropy table and stop once the map moves by
+    /// less than `CONVERGED` (or after `fixed − 1` updates); the last one is exact.
     fn solve(&self, payload: f64, fixed: Option<usize>) -> Result<Solution, CostError> {
         let n = self.positions.len();
         let mut ln_fi = vec![f64::NEG_INFINITY; n];
@@ -444,14 +400,9 @@ impl<'a> Coupling<'a> {
         })
     }
 
-    /// The cost of position `index` from its `ln FI` at the last update.
-    ///
-    /// Below the floor's cost this is the exact solver's `ρ` again. At or above it, the payload
-    /// search kept `β` at the floor 1e-300 and `FI` divided the coupled sum by that floor, so
-    /// the cost solves the optimality condition with the neighbours' final `β` instead:
-    /// `λρ/ln 2 = w_u (A β(ρ) + C)`, i.e. `ρ = s + a β(ρ)` with `s = ln 2 · w_u C/λ` and
-    /// `a = ln 2 · w_u A/λ` (a coordinate solve). Its root lies between
-    /// `max(s, ρ_A)` and `s + ρ_A`, where `ρ_A` is the cost without the coupled sum.
+    /// The cost of a position from its `ln FI` at the last update. Where the search left `β` at the
+    /// 1e-300 floor, the coupled term was divided by that floor, so the cost is solved again from the
+    /// neighbours' final `β` (a one-variable root between known bounds).
     fn final_cost(&self, index: usize, ln_fi: f64, beta: &[f64], ln_lambda: f64) -> f64 {
         let rho = probability::uncapped_cost(ln_fi, ln_lambda);
         if rho < probability::RHO_MAX || !rho.is_finite() {

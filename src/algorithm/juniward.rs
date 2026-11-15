@@ -1,11 +1,6 @@
-//! J-UNIWARD costs (Holub, Fridrich and Denemark, EURASIP JIS 2014) for ±1 changes.
-//!
-//! The distortion of changing one quantized coefficient is the sum, over three directional
-//! Daubechies-8 wavelet residuals of the decompressed luminance, of the absolute residual change
-//! divided by `σ + |residual|`, with `σ = 2⁻⁶`. The residual change of a DCT basis pattern is
-//! separable, so it is precomputed once per filter and frequency; the cover residuals are
-//! computed per 512-pixel tile with a 16-pixel mirrored halo. A change of +1 and of −1 has the
-//! same distortion. Pixels are decompressed without rounding or clipping.
+//! J-UNIWARD costs (Holub, Fridrich, Denemark 2014) for ±1 changes: the change of three
+//! Daubechies-8 wavelet residuals, each divided by `σ + |residual|` with `σ = 2⁻⁶`. Residual
+//! changes per frequency are precomputed once; cover residuals are computed in 512-pixel tiles.
 
 use crate::algorithm::model::{BLOCK, CostError, CostModel, Costs, DctPlane, Permitted};
 

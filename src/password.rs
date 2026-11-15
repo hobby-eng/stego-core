@@ -20,12 +20,8 @@ pub struct Password {
 }
 
 impl Password {
-    /// Normalizes `text`.
-    ///
-    /// # Errors
-    ///
-    /// [`StegoError::PasswordCharacter`] for a control character, [`StegoError::PasswordShort`]
-    /// and [`StegoError::PasswordLong`] outside [`PASSWORD_MIN`]..=[`PASSWORD_MAX`] bytes.
+    /// Normalizes `text` (NFKD). Fails for a control character, or for a length outside
+    /// [`PASSWORD_MIN`]..=[`PASSWORD_MAX`] bytes.
     pub fn new(text: &str) -> Result<Self, StegoError> {
         if text.len() > PASSWORD_MAX * 4 {
             return Err(StegoError::PasswordLong);

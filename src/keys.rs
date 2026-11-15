@@ -36,11 +36,7 @@ impl WorkFactor {
     pub const MAX_MEMORY_LEVEL: u32 = 29;
 
     /// Accepts a PIM up to [`WorkFactor::MAX_PIM`] and a memory level up to
-    /// [`WorkFactor::MAX_MEMORY_LEVEL`].
-    ///
-    /// # Errors
-    ///
-    /// [`StegoError::Pim`], then [`StegoError::MemoryLevel`].
+    /// [`WorkFactor::MAX_MEMORY_LEVEL`]; fails with [`StegoError::Pim`], then [`StegoError::MemoryLevel`].
     pub const fn new(pim: u32, memory_level: u32) -> Result<Self, StegoError> {
         if pim > Self::MAX_PIM {
             return Err(StegoError::Pim);

@@ -1,15 +1,6 @@
-//! Image statistics of J-CRF (Pan et al. 2024, Sec. 4.1): the variance of each selected
-//! coefficient in quantization steps, and the correlation between neighbouring blocks.
-//!
-//! The pixel model is J-MiPOD's (2×2 Wiener residual, trigonometric polynomial of degree 3) with
-//! the paper's window `p = 5`, so 25 − 6 = 19 degrees of freedom. The six basis functions are the
-//! 5-point DCT-II vectors of frequencies `a + b ≤ 2`; the other 19 span the residual of the fit.
-//! The pixel variance is the residual energy over 19, and the noise `ξ` of a pixel is the
-//! residual at the window centre (its value minus the fitted one), both summed directly from the
-//! 19 residual coefficients. The block correlation is
-//! Pearson's coefficient between the 64 noises of two blocks, shared by all 64 modes (eq. 32).
-//! Coefficient variance: `Σ D[u,x]² ζ²_x / Δ_u²` (eq. 31), floored at 1e-10, with no smoothing
-//! across blocks (the pairwise terms take that role).
+//! Image statistics of J-CRF (Pan et al. 2024, Sec. 4.1): each selected coefficient's variance in
+//! quantization steps, and the correlation between neighbouring blocks. The pixel model is
+//! J-MiPOD's with a 5×5 window; how the residual is summed is in docs/TECHNICAL.md.
 
 use crate::algorithm::jmipod::sampling::{BlockRect, Dct, Raster, SIDE, Selection, TILE_BLOCKS};
 use crate::algorithm::jmipod::statistics::global_noise;
@@ -37,13 +28,9 @@ pub(crate) struct Model {
 /// Pixel variances and noises of one block, row-major.
 type Fit = ([f64; BLOCK], [f64; BLOCK]);
 
-/// The orthonormal 5-point DCT-II basis `φ_k[j] = s_k cos(kπ(2j+1)/10)`.
-///
-/// The window's 25 coefficients `c_uv = Σ φ_u[i] φ_v[j] r[i][j]` split into the six of the fit
-/// (`u + v ≤ 2`) and the 19 of the residual. The pixel variance is the residual's energy
-/// `Σ_{u+v≥3} c_uv² / 19`, and the noise of the centre is the residual itself there,
-/// `Σ_{u+v≥3} c_uv φ_u[2] φ_v[2]`. Both are summed from the residual's own coefficients, not
-/// as a total minus the fit, so nothing cancels when the fit carries most of the energy.
+/// The orthonormal 5-point DCT-II basis. Variance and centre noise are summed from the 19 residual
+/// coefficients directly, not as total minus fit, so nothing cancels when the fit holds most of
+/// the energy.
 pub(super) struct Basis {
     phi: [[f64; P]; P],
 }

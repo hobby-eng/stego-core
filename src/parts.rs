@@ -1,10 +1,5 @@
-//! A message spread over several photos. Each photo's record holds the set it belongs to, the
-//! scheme, its number and the count, then its payload:
-//! - split: a slice of the message; every photo is needed;
-//! - threshold: a Reed–Solomon shard of the ciphertext and one key share; any `needed`
-//!   photos suffice (`crate::threshold`).
-//!
-//! The photos may be read in any order.
+//! A message spread over several photos: either split, so every photo is needed, or as Reed–Solomon
+//! shards with Shamir key shares, so any `needed` photos suffice. Photos may be read in any order.
 
 use crate::content::Content;
 use crate::random::Random;
@@ -170,12 +165,8 @@ pub(crate) struct Assembled {
     pub others: usize,
 }
 
-/// Joins the parts by set and gives one set's outcome; `None` when there are no parts.
-///
-/// Every set is judged on its own, so a set that is wrong never hides one that is right. The
-/// sets are tried from the one with the most parts down (among equals, the one whose first photo
-/// was given first) and the first that is complete is the answer; when none is complete, the
-/// answer is the outcome of the first set tried.
+/// Joins the parts by set and returns one set's outcome (`None` without parts). Sets are judged
+/// separately, so a broken set never hides a good one; the biggest complete set wins.
 pub(crate) fn assemble(parts: Vec<Part>) -> Option<Assembled> {
     let mut sets = sets(parts);
     sets.sort_by_key(|set| {

@@ -16,14 +16,9 @@ use crate::sites::{SiteRule, Sites};
 use crate::{Password, StegoError};
 use zeroize::Zeroizing;
 
-/// What a password opened in the photos given.
-///
-/// The photos may hold more than one set under the same password. Every set is judged on its
-/// own and one is answered for: a whole message if any set gives one, taking the set with the
-/// most photos and, among equals, the one whose first photo was given first; otherwise the
-/// state of the set with the most photos. [`ReadReport::other_sets`] counts what else the
-/// password opened, and [`ReadReport::files`] names the photos of the set that was read, so a
-/// host can ask for the others to be read apart.
+/// What a password opened in the photos. If they hold several sets under that password, the biggest
+/// whole one is answered for; [`ReadReport::other_sets`] counts the rest, so a host can read them
+/// separately.
 #[derive(Debug)]
 pub enum Reading {
     /// No photo opened. A photo without any record gives the same answer.
@@ -73,12 +68,8 @@ impl Revealed {
     }
 }
 
-/// Opens what `password` protects in `covers`, which may be given in any order.
-///
-/// # Errors
-///
-/// [`StegoError::Carriers`] for no photos or too many, [`StegoError::Crypto`] when the key
-/// derivation fails.
+/// Opens what `password` protects in `covers`, in any order. Fails with [`StegoError::Carriers`]
+/// for no photos or too many, or [`StegoError::Crypto`] when key derivation fails.
 pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoError> {
     if covers.is_empty() || covers.len() > CARRIERS_MAX {
         return Err(StegoError::Carriers);

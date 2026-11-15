@@ -1,9 +1,6 @@
-//! The encrypted record a layer carries: a random nonce, the padded body and its tag.
-//!
-//! The body holds the length and bytes of one part of the content, padded with random bytes to
-//! one of a fixed list of sizes, so that the number of changed coefficients tells only the size class.
-//! A reader does not know the size and tries each class; a wrong password or a wrong class fails
-//! the tag.
+//! The encrypted record a layer carries: a nonce, the padded body and its tag. Bodies are padded to
+//! a fixed list of sizes, so the number of changes reveals only the size class; a reader tries
+//! each class.
 
 use crate::StegoError;
 use crate::keys::KEY_BYTES;

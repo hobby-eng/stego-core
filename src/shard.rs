@@ -1,15 +1,7 @@
-//! Reed–Solomon erasure coding over GF(2^8): `k` data pieces become `n` pieces, any `k` of which
-//! rebuild the data.
-//!
-//! The code is systematic: the first `k` pieces are the data itself. Parity row `i` is row `i` of
-//! the Vandermonde matrix `V[r][c] = r^c` times the inverse of `V`'s top `k` rows, in the field
-//! with polynomial `x^8 + x^4 + x^3 + x^2 + 1` (0x11D): the construction of Backblaze's and
-//! klauspost's codes and of the `reed-solomon-erasure` crate, so their pieces and these agree
-//! byte for byte. A row depends only on its number and `k`, so pieces can be added to a set later
-//! without touching the existing ones.
-//!
-//! Only missing pieces are rebuilt: a piece that is present must be right. Every piece of this
-//! crate sits inside a record whose tag was checked before it reaches the decoder.
+//! Reed–Solomon erasure coding over GF(2^8): `k` data pieces become `n`, any `k` of which rebuild
+//! the data. Same matrix as Backblaze, klauspost and `reed-solomon-erasure`, so pieces match byte
+//! for byte. Only missing pieces are rebuilt; present ones were already checked by their record's
+//! tag.
 
 mod field;
 mod matrix;

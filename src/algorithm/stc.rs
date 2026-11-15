@@ -1,16 +1,7 @@
-//! Syndrome-trellis codes (Filler, Judas and Fridrich, IEEE TIFS 2011).
-//!
-//! The binary coder hides message bits in the parities of cover elements at minimum total
-//! cost. `m` message bits share `n` columns of the parity-check matrix as evenly as possible:
-//! bit `k` owns columns `⌊kn/m⌋ … ⌊(k+1)n/m⌋ − 1`. Every column is a `height`-bit vector
-//! whose lowest bit is the current message bit's row. The trellis restarts every `segment`
-//! message bits; `usize::MAX` gives one trellis over the whole cover.
-//!
-//! The ternary coder implements ±1 changes with Algorithm 1 of the paper (section VI): it
-//! first embeds into the second bit `P2(x) = ⌊x/2⌋ mod 2`, then into the least significant bit
-//! `P1(x) = x mod 2` conditioned on the first result. Within `{x − 1, x, x + 1}` the two bits
-//! identify the value. The paper's example shows why the order matters: starting from the LSB
-//! leaves the second layer at relative payload 1 on mostly wet elements, where the coder fails.
+//! Syndrome-trellis codes (Filler, Judas, Fridrich, TIFS 2011). The binary coder hides bits in the
+//! parities of cover elements at minimum cost. The ternary coder makes ±1 changes by embedding
+//! first into the second bit and then into the last one (Algorithm 1 of the paper); the other order
+//! fails on mostly wet covers.
 
 use crate::algorithm::model::Costs;
 

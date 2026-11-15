@@ -1,23 +1,7 @@
-//! Symmetric J-MiPOD costs from the TIFS model, without side information.
-//!
-//! This implements the non-side-informed objective of Cogranne, Giboulot and Bas,
-//! DOI 10.1109/TIFS.2021.3111713, with the variance estimator of Sedighi, Cogranne
-//! and Fridrich, DOI 10.1109/TIFS.2015.2486744. No embedding or JPEG I/O is done.
-//!
-//! A tiled statistics pass computes the Fisher information; the payload solver uses a Hermite
-//! table of the ternary entropy and Newton's method on `ln λ` with a bisection fallback, finished
-//! by exact passes that hold the payload to `1e-9` relative.
-//!
-//! Corrections to the printed TIFS formulas:
-//! - Eq. (24): `P_perp = I - H (H^T H)^-1 H^T`.
-//! - Covariance for a forward-DCT matrix `D` is `D Sigma D^T`.
-//! - Eqs. (50)-(53): use the orthonormal JPEG DCT-II normalization.
-//! - Eq. (29): `f(beta) = beta / log2(1 / beta - 2)`.
-//!
-//! Working images use bounded overlapping tiles; only blocks next to selected positions are
-//! decoded in the second pass. A first, global pass estimates Wiener noise even when only a
-//! subset of coefficients is selected. Results use `f64`; their order matches the caller's
-//! positions, and a permutation of the positions gives the same bits. Single-threaded.
+//! Symmetric J-MiPOD costs (Cogranne, Giboulot, Bas, TIFS 2021, without side information), with
+//! Sedighi et al.'s variance estimator. The printed formulas have typos; the corrections used here
+//! are listed in docs/TECHNICAL.md. Works in bounded tiles and gives the same bits for any order
+//! of positions.
 
 pub(crate) mod probability;
 #[cfg(test)]
@@ -48,19 +32,10 @@ impl CostModel for JMiPod {
     }
 }
 
-/// Returns per-direction change probabilities and the TIFS Lagrange multiplier.
-///
-/// `beta[i]` is the probability of each of `+1` and `-1`, not their sum. A wet
-/// position has zero probability. The multiplier satisfies
-/// `beta / log2(1 / beta - 2) = lambda / smoothed_fisher` before the `1e-300` floor, and the
-/// probabilities carry `payload_bits` within `1e-9 · max(payload_bits, 1)` bits.
-/// Zero payload returns `lambda = 0` and the finite-cost floor `beta = 1e-300`
-/// for `Both`. Empty capacity, invalid/non-finite payloads and payloads at or above
-/// ternary capacity return [`CostError::Payload`]. One-direction policies return
-/// [`CostError::Unsupported`]; invalid dimensions and positions use the shared errors.
-///
-/// Additional memory is about 16 bytes per position (plus 4 when the positions are not
-/// ascending) plus bounded tile buffers.
+/// Per-direction change probabilities (`beta[i]` is each of +1 and −1, not their sum) and the
+/// Lagrange multiplier. Wet positions get zero; the payload is met within
+/// `1e-9 · max(payload_bits, 1)` bits. Errors: empty capacity, a bad payload, one-direction policies
+/// and invalid shapes. Uses about 16 bytes per position plus tile buffers.
 pub fn change_probabilities(
     plane: &DctPlane,
     positions: &[usize],

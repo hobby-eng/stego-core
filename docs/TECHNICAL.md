@@ -8,6 +8,7 @@ This document explains each step from a photo and a password to a written file, 
 - [Sites: which coefficients may change](#sites-which-coefficients-may-change)
 - [Cost models](#cost-models)
 - [The coders](#the-coders)
+- [Implementation notes](#implementation-notes)
 - [Records and keys](#records-and-keys)
 - [The decoy mode](#the-decoy-mode)
 - [Several photos](#several-photos)
@@ -54,6 +55,20 @@ The model matters only to the writer; the reader never needs it, so the default 
 - **Binary STC** (decoy mode): the parity of each site carries the decoy. A change of parity may go up or down; that free choice is used next.
 
 **Wet-paper code** (Fridrich, Goljan, Soukal 2004): the secret behind a decoy is the keyed syndrome of the second bit of |q| over every site. Only the decoy's two-way changes may set it ("dry" sites); all others are "wet". The writer solves the linear system over GF(2) for the dry sites, choosing every free variable from the host's random source, so the directions look like coins. It is the double-layered ±1 scheme of Zhang, Zhang and Wang (2007) under a separate key.
+
+## Implementation notes
+
+What the code comments leave out, for whoever maintains the cost models and coders.
+
+- **J-MiPOD.** The printed TIFS formulas have typos; the code uses: eq. 24 `P⊥ = I − H(HᵀH)⁻¹Hᵀ`; the covariance of a forward DCT matrix `D` is `D Σ Dᵀ`; eqs. 50–53 with the orthonormal JPEG DCT-II; eq. 29 `f(β) = β / log₂(1/β − 2)` (printed as `x·log₂(x − 2)`). The multiplier is found by Newton's method on `ln λ` (with a bisection fallback) over a Hermite table of the ternary entropy, then exact passes hold the payload to `1e-9` relative. A first global pass estimates the Wiener noise even when only some coefficients are selected.
+- **J-CRF statistics.** Window `p = 5`, so 19 degrees of freedom; the six fitted basis functions are the 5-point DCT-II vectors with `a + b ≤ 2`. Pixel variance is the residual energy over 19, a pixel's noise is the residual at the window centre, and the block correlation is Pearson's over the 64 noises of two blocks (eq. 32). Coefficient variance is `Σ D[u,x]² ζ²ₓ / Δᵤ²` (eq. 31), floored at `1e-10`, with no smoothing across blocks.
+- **J-CRFW.** Energy per coefficient `β²/σ⁴` and per edge `[βᵢ²/σᵢ⁴ + βⱼ²/σⱼ⁴ + 2ϱ²βᵢβⱼ/(σᵢ²σⱼ²)] / (1 − ϱ²)²`; the optimality condition `βᵢ·FIᵢ = λ·log₂(1/βᵢ − 2)` couples neighbours through `βⱼ/βᵢ`. The solver starts with ratio 1 (0 for a neighbour that cannot change) and updates until the `β` map moves by less than `1e-6` of its total, usually about a dozen times and at most 60 (the paper suggests three); only the last update is exact. Costs are `ρ = ln(1/β − 2)` (eq. 30). Choices the paper leaves open: pixels decoded without rounding or +128, edges only between blocks inside the image, `β = 0` for a neighbour that is not selected or is wet. An exact coordinate solver changed photos' maps by at most `5e-6` at 2–30 times the time, so it is not used.
+- **J-CRFW weights.** Block weight is the sum of S-UNIWARD costs (`σ = 1`) of its 64 pixels, with convolution residuals and half-sample symmetric reflection, as the reference code and conseal (checked to `1e-9`). Mode weight is 5 for the last `n` zigzag modes: `n = 16` at quality 75 and 3 at quality 95, interpolated linearly in the IJG quality estimated from the table and clamped to `0..=16`.
+- **J-UNIWARD.** `σ = 2⁻⁶`; residuals per 512-pixel tile with a 16-pixel mirrored halo; pixels decompressed without rounding or clipping.
+- **UERD.** The DC step is replaced by `(q₀₁ + q₁₀)/2`; outside the image the edge blocks are repeated. Equal to conseal 2026.11 (`compute_cost_adjusted`) on four public photos, edge blocks and DC included.
+- **Syndrome-trellis codes.** `m` message bits share `n` columns as evenly as possible (bit `k` owns columns `⌊kn/m⌋` to `⌊(k+1)n/m⌋ − 1`); the trellis restarts every `segment` bits, and `usize::MAX` gives one trellis over the whole cover.
+- **Wet-paper layer.** Column `j` of `H` comes from the hidden key and the site's position alone; free variables come from a keyed stream. The layer on the decoy's directions is the double-layered ±1 scheme of Zhang, Zhang and Wang (IEEE SPL 14(11), 2007) under a separate key.
+- **Reed–Solomon shards.** Parity row `i` is row `i` of the Vandermonde matrix `V[r][c] = rᶜ` times the inverse of its top `k` rows, in GF(2⁸) with polynomial 0x11D.
 
 ## Records and keys
 

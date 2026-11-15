@@ -1,17 +1,8 @@
 //! StegoCode's core: password-protected records hidden in baseline JPEG photos.
 //!
-//! A host (the desktop or phone program, the browser page) admits photos with [`Cover::new`],
-//! shows [`Cover::info`] and [`Cover::capacity`], hides with [`hide`] and reads with [`reveal`].
-//! The library opens no file, network connection, clock or thread: the host passes bytes and a
-//! [`Random`] source. Every new file is returned only after it reads back with each password and
-//! each message gives the same SHA-256.
-//!
-//! Two modes exist ([`Mode`]): the standard mode with one record, and the decoy mode, where a
-//! decoy with its own password carries the secret in the directions of its changes. The cost
-//! model and the site rule are choices of the advanced view ([`Settings`]); a reader tries every
-//! one, so a later default never makes older files unreadable.
-//!
-//! The record format is experimental until the detectability measurements are done.
+//! The host admits photos with [`Cover::new`], hides with [`hide`] and reads with [`reveal`]. The
+//! library opens no file, network, clock or thread, and returns a file only after it reads back
+//! with every password. The record format is experimental until the detectability tests are done.
 
 #![deny(unsafe_code)]
 

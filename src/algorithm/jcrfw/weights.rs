@@ -1,15 +1,6 @@
-//! J-CRFW weights (Pan et al. 2024, Sec. 4.2).
-//!
-//! - Block weight `w_b`: the sum over the block's 64 pixels of S-UNIWARD costs of the decompressed
-//!   image (Holub, Fridrich, Denemark 2014: Daubechies-8 directional residuals `W_k = K_k * X`,
-//!   `ρ_x = Σ_k Σ_y |K_k(y − x)| / (σ + |W_k(y)|)` with `σ = 1`), so smooth blocks weigh more.
-//!   As in the reference S-UNIWARD (and conseal, checked to 1e-9), the residual is a convolution
-//!   and the image is extended by half-sample symmetric reflection, residuals in the margin
-//!   included. (The first version used a correlation, i.e. mirrored filters; fixed 2026-11-10.)
-//! - Join weight of an edge: the mean of its two block weights.
-//! - Mode weight: 5 for the last `n` modes in zigzag order, 1 for the rest. The paper gives
-//!   `n = 16` at quality 75 and `n = 3` at quality 95; between and beyond we interpolate linearly
-//!   in the IJG quality estimated from the table and clamp to `0..=16` (our choice).
+//! J-CRFW weights (Pan et al. 2024, Sec. 4.2): blocks by their summed S-UNIWARD costs (smooth
+//! blocks weigh more), edges by the mean of their two blocks, and the last zigzag modes by 5.
+//! The number of weighted modes follows the photo's quality; see docs/TECHNICAL.md.
 
 use crate::algorithm::jmipod::sampling::{BlockRect, Dct, SIDE, TILE_BLOCKS};
 use crate::algorithm::model::{BLOCK, DctPlane};
@@ -190,12 +181,9 @@ fn correlate(
     (out, out_c, out_r)
 }
 
-/// S-UNIWARD costs of the `(columns − 2·HALO) × (rows − 2·HALO)` pixels inside a window that
-/// carries [`HALO`] pixels of reflected context on every side.
-///
-/// Residuals are convolutions, `W(y) = Σ_s K(s) X(y + 15 − s)` (the orientation of the
-/// reference code's `conv2`; checked against conseal), and the cost of a pixel sums
-/// `|K| / (σ + |W|)` over every residual it touches, including those in the reflected margin.
+/// S-UNIWARD costs of the pixels inside a window that carries [`HALO`] pixels of reflected context
+/// on each side. Residuals are convolutions, oriented as in the reference code (checked against
+/// conseal), and margin residuals count too.
 pub(crate) fn window_costs(pixels: &[f64], columns: usize, rows: usize) -> Vec<f64> {
     let high: [f64; TAPS] =
         std::array::from_fn(|i| LOW[TAPS - 1 - i] * if i % 2 == 0 { -1.0 } else { 1.0 });

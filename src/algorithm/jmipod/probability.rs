@@ -1,22 +1,7 @@
-//! Change probabilities (TIFS eq. 28–34) and the search for the Lagrange multiplier.
-//!
-//! The Lagrangian (28) is stationary at `β·FI = λ·log2(1/β − 2)`, so `β = f⁻¹(λ/FI)` with
-//! `f(x) = x / log2(1/x − 2)` (the paper prints `x·log2(x − 2)`, a typo). With the STC cost
-//! `ρ = ln(1/β − 2)` of eq. (34), i.e. `β = 1/(2 + e^ρ)`, the condition reads `ρ (2 + e^ρ) = a`
-//! with `a = ln 2 · FI / λ`. That form has no cancellation near `β = 1/3`, yields the cost
-//! itself, and its logarithm is increasing and convex in `ln ρ`, so Newton's method converges
-//! from any start. The payload is `H3(β) = (2βρ + ln(1 + 2e^−ρ)) / ln 2` bits.
-//!
-//! The search runs in two stages. First Newton's method on `ln P(ln λ) = ln R`, with a bisection
-//! fallback, reads `H3` and its slope from a cubic Hermite table in `k = ln a`: no logarithm or
-//! exponential per coefficient, two or three passes after a start from a subsample. Then every
-//! pass is exact: it solves `ρ` for each coefficient by Newton from the tabulated start, writes
-//! the output and sums the exact payload. If that payload misses `R` by more than
-//! `TOLERANCE · R`, `λ` takes one more Newton step on the exact sum. The table is accurate to
-//! well below `TOLERANCE`, so one exact pass usually suffices.
-//!
-//! Sums run in ascending position order whatever order the caller used, so a permutation of the
-//! positions gives the same bits.
+//! Change probabilities (TIFS eq. 28–34) and the search for the Lagrange multiplier. The condition
+//! is solved in the form `ρ (2 + e^ρ) = ln 2 · FI / λ`, which has no cancellation and lets Newton's
+//! method converge from any start. A tabulated pass finds `λ`, then exact passes hold the payload.
+//! Sums run in position order, so reordering the positions gives the same bits.
 
 use std::f64::consts::LN_2;
 use std::sync::OnceLock;

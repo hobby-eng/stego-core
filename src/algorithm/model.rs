@@ -68,14 +68,9 @@ pub struct Costs {
 
 /// A source of embedding costs.
 pub trait CostModel {
-    /// Computes costs for the coefficients the coder will use.
-    ///
-    /// `positions` are distinct indexes into [`DctPlane::coefficients`]: the cover of the
-    /// syndrome coder, usually a keyed subset of the image, or every coefficient for
-    /// experiments. `permitted` has one entry per position. A forbidden direction must get
-    /// an infinite cost. `payload_bits` is the number of message bits the coder will embed
-    /// into these positions, framing included; payload-independent models (J-UNIWARD) ignore
-    /// it, model-based ones (J-MiPOD, J-CRFW) solve their change probabilities over these positions.
+    /// Costs for the coefficients the coder will use. `positions` index the plane's coefficients and
+    /// `permitted` has one entry each; a forbidden direction must cost infinity. `payload_bits` (framing
+    /// included) matters only to model-based costs such as J-MiPOD and J-CRFW.
     fn costs(
         &self,
         plane: &DctPlane,

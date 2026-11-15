@@ -71,14 +71,8 @@ pub(crate) fn check_carriers(covers: &[&Cover]) -> Result<(), StegoError> {
     Ok(())
 }
 
-/// Hides `secret` (and in the decoy mode `decoy`) in `covers`.
-///
-/// # Errors
-///
-/// [`StegoError::Carriers`], [`StegoError::DuplicatePhoto`], [`StegoError::DecoyChoice`] or
-/// [`StegoError::PasswordsEqual`] for a wrong request; [`StegoError::MessageLong`] or
-/// [`StegoError::HiddenLong`] when a message does not fit; [`StegoError::Verification`] when the
-/// new files do not read back exactly.
+/// Hides `secret` (and in decoy mode `decoy`) in `covers`. Fails for a wrong request, a message that
+/// doesn't fit, or new files that don't read back exactly ([`StegoError::Verification`]).
 pub fn hide(
     covers: &[&Cover],
     settings: &Settings,

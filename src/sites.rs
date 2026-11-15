@@ -1,9 +1,6 @@
-//! Which luminance coefficients carry a record and which way each may move.
-//!
-//! Every rule keeps zeros at zero and non-zeros away from zero, so a reader finds the same sites
-//! in the changed photo as the writer found in the original, and every change keeps its place in
-//! the entropy-coded run of zeros. A move whose new size has no code in the photo's own Huffman
-//! table is forbidden, so the file keeps its tables.
+//! Which luminance coefficients carry a record and which way each may move. Zeros stay zero and
+//! non-zeros never reach zero, so the reader finds the same sites. Moves that would need a new
+//! Huffman code are forbidden, so the file keeps its tables.
 
 use crate::jpeg::{COEFFICIENTS, Jpeg, ZIGZAG};
 
