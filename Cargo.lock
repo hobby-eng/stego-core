@@ -487,7 +487,7 @@ dependencies = [
 [[package]]
 name = "secret-protection-core"
 version = "0.1.0"
-source = "git+https://github.com/hobby-eng/secret-protection-core?rev=39e462e946cc300a8a3d3e145517957094eb7c8c#39e462e946cc300a8a3d3e145517957094eb7c8c"
+source = "git+https://github.com/hobby-eng/secret-protection-core?rev=2747028f4452c3e36f2a500eabdbc795010bf295#2747028f4452c3e36f2a500eabdbc795010bf295"
 dependencies = [
  "landlock",
  "libc",
