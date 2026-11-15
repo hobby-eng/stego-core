@@ -29,7 +29,7 @@ What is planned, in rough order. Done items move to the [changelog](../CHANGELOG
 ## The program (StegoCode)
 
 - Tauri 2 with Svelte and TypeScript, once the look is chosen.
-- The secret work in a separate isolated process; the window process chooses and saves files.
-- Passwords and secret text typed in a native dialog, never in the web view.
+- The secret work in a separate isolated process (`secret_protection_core::Worker`) with every option of `secret_protection_core::Options` turned on (file locks, `sendmsg`, dynamic code, DLLs not signed by Microsoft), which reports its isolation before it gets any secret; the window process chooses and saves files, and gets back only what it shows or saves, never a password or a key.
+- Passwords and secret text never held by the web view: the field sends each typed character at once, through the Rust side, to the worker, which collects them in protected memory; the web view keeps only their count, to draw dots, and sends a deletion as a command. Pasting goes the same way: the Rust side reads the clipboard and hands it to the worker, so that the web view never sees it. A small native dialog that alone asks for the password, as GnuPG's pinentry does, is a stricter mode for later. The terminal version reads the password in the worker itself.
 - Screen capture blocked where the system allows it; no recent-files entries; no crash dumps.
 - The same screens in the browser through the WebAssembly build of the core.
