@@ -1,10 +1,11 @@
 //! What a record holds: a text or a file with its name, as exact bytes.
 
 use crate::StegoError;
+use crate::plain::{Plain, same};
 use crate::protect::Secret;
 use sha2::{Digest, Sha256};
 use std::fmt;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 /// Longest file name, in UTF-8 bytes.
 pub const FILE_NAME_MAX: usize = 255;
@@ -26,7 +27,8 @@ pub enum Kind {
 /// A message to hide or a message read back. The bytes are exact: nothing is normalized.
 pub struct Content {
     kind: Kind,
-    name: String,
+    /// A file's name can say as much as its contents: it lies in protected pages too.
+    name: Secret,
     data: Secret,
 }
 
@@ -37,7 +39,7 @@ impl Content {
     ///
     /// [`StegoError::MessageEmpty`] for an empty text.
     pub fn text(text: &str) -> Result<Self, StegoError> {
-        Self::new(Kind::Text, String::new(), text.as_bytes())
+        Self::new(Kind::Text, "", text.as_bytes())
     }
 
     /// A file's bytes with its name. `name` is the bare file name, without any folder.
@@ -47,7 +49,7 @@ impl Content {
     /// [`StegoError::FileName`] for an unusable name, [`StegoError::MessageEmpty`] for no bytes.
     pub fn file(name: &str, mut bytes: Vec<u8>) -> Result<Self, StegoError> {
         let made = if usable_name(name) {
-            Self::new(Kind::File, name.to_owned(), &bytes)
+            Self::new(Kind::File, name, &bytes)
         } else {
             Err(StegoError::FileName)
         };
@@ -56,17 +58,18 @@ impl Content {
         made
     }
 
-    fn new(kind: Kind, name: String, bytes: &[u8]) -> Result<Self, StegoError> {
-        // Wiped when the content is refused: a file's name can say as much as its contents.
-        let mut name = Zeroizing::new(name);
+    fn new(kind: Kind, name: &str, bytes: &[u8]) -> Result<Self, StegoError> {
         if bytes.is_empty() {
             return Err(StegoError::MessageEmpty);
         }
         let mut data = Secret::with_capacity(bytes.len());
         data.push(bytes)?;
+        let mut held = Secret::with_capacity(name.len());
+        held.push(name.as_bytes())?;
+        crate::plain::note(data.is_locked() && held.is_locked());
         Ok(Self {
             kind,
-            name: std::mem::take(&mut *name),
+            name: held,
             data,
         })
     }
@@ -80,7 +83,7 @@ impl Content {
     /// The file name; empty for a text.
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.name
+        self.name.as_str().unwrap_or_default()
     }
 
     /// The exact bytes: the UTF-8 text or the file's contents.
@@ -106,7 +109,7 @@ impl Content {
 
     /// Length of the encoded form.
     pub(crate) fn encoded_len(&self) -> usize {
-        CONTENT_HEADER + self.name.len() + self.data.as_bytes().len()
+        CONTENT_HEADER + self.name.as_bytes().len() + self.data.as_bytes().len()
     }
 
     /// The encoded form: kind, name length, name, data.
@@ -116,15 +119,15 @@ impl Content {
             Kind::File => KIND_FILE,
         };
         // `usable_name` keeps names within one byte of length.
-        out[1] = self.name.len() as u8;
-        let name_end = CONTENT_HEADER + self.name.len();
+        out[1] = self.name.as_bytes().len() as u8;
+        let name_end = CONTENT_HEADER + self.name.as_bytes().len();
         out[CONTENT_HEADER..name_end].copy_from_slice(self.name.as_bytes());
         out[name_end..name_end + self.data.as_bytes().len()].copy_from_slice(self.data.as_bytes());
     }
 
     /// The encoded form in a wiped buffer.
-    pub(crate) fn encoded(&self) -> Zeroizing<Vec<u8>> {
-        let mut out = Zeroizing::new(vec![0; self.encoded_len()]);
+    pub(crate) fn encoded(&self) -> Plain {
+        let mut out = Plain::zeros(self.encoded_len());
         self.encode_into(&mut out);
         out
     }
@@ -138,25 +141,23 @@ impl Content {
         let data = rest.get(name_len..)?;
         match kind {
             KIND_TEXT if name.is_empty() && std::str::from_utf8(data).is_ok() => {
-                Self::new(Kind::Text, String::new(), data).ok()
+                Self::new(Kind::Text, "", data).ok()
             }
-            KIND_FILE if usable_name(name) => Self::new(Kind::File, name.to_owned(), data).ok(),
+            KIND_FILE if usable_name(name) => Self::new(Kind::File, name, data).ok(),
             _ => None,
         }
     }
 
     /// Whether both contents are the same kind, name and bytes.
     pub(crate) fn same_as(&self, other: &Self) -> bool {
-        self.kind == other.kind
-            && self.name == other.name
-            && self.data.as_bytes() == other.data.as_bytes()
+        let name = same(self.name.as_bytes(), other.name.as_bytes());
+        let data = same(self.data.as_bytes(), other.data.as_bytes());
+        self.kind == other.kind && name && data
     }
-}
 
-impl Drop for Content {
-    fn drop(&mut self) {
-        // The data wipes itself; a file's name can say as much as its contents.
-        self.name.zeroize();
+    /// Whether its pages are locked.
+    pub(crate) fn is_locked(&self) -> bool {
+        self.data.is_locked() && self.name.is_locked()
     }
 }
 

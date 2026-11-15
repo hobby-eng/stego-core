@@ -32,19 +32,21 @@ impl Password {
         {
             return Err(StegoError::PasswordCharacter);
         }
-        let mut bytes = Zeroizing::new(Vec::with_capacity(text.len() * 2));
-        let mut buffer = [0; 4];
-        for c in text.nfkd() {
-            bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
-        }
-        if bytes.len() < PASSWORD_MIN {
+        // Counted first, then written straight into its pages. The normalizer's own buffer of
+        // characters it is still composing is not covered (docs/TECHNICAL.md, Protection).
+        let length: usize = text.nfkd().map(char::len_utf8).sum();
+        if length < PASSWORD_MIN {
             return Err(StegoError::PasswordShort);
         }
-        if bytes.len() > PASSWORD_MAX {
+        if length > PASSWORD_MAX {
             return Err(StegoError::PasswordLong);
         }
-        let mut locked = Secret::with_capacity(bytes.len());
-        locked.push(&bytes)?;
+        let mut locked = Secret::with_capacity(length);
+        crate::plain::note(locked.is_locked());
+        let mut buffer = Zeroizing::new([0; 4]);
+        for c in text.nfkd() {
+            locked.push(c.encode_utf8(&mut *buffer).as_bytes())?;
+        }
         Ok(Self {
             bytes: locked,
             work: WorkFactor::default(),
@@ -54,13 +56,12 @@ impl Password {
     /// Whether both passwords have the same normalized bytes.
     #[must_use]
     pub fn same_as(&self, other: &Self) -> bool {
-        self.bytes().len() == other.bytes().len()
-            && self
-                .bytes()
-                .iter()
-                .zip(other.bytes().iter())
-                .fold(0_u8, |acc, (a, b)| acc | (a ^ b))
-                == 0
+        crate::plain::same(self.bytes(), other.bytes())
+    }
+
+    /// Whether its pages are locked.
+    pub(crate) fn is_locked(&self) -> bool {
+        self.bytes.is_locked()
     }
 
     /// The same password with another PIM and memory level; reading needs the same ones.
@@ -96,6 +97,20 @@ mod tests {
         let composed = Password::new("caf\u{e9} password 1").unwrap();
         let decomposed = Password::new("cafe\u{301} password 1").unwrap();
         assert!(composed.same_as(&decomposed));
+    }
+
+    /// The bytes of the Unicode standard's own decompositions: U+00E9 is e and U+0301, the
+    /// ligature U+FB01 is f and i, and U+2460, the circled one, is 1.
+    #[test]
+    fn a_password_is_the_bytes_of_its_compatibility_decomposition() {
+        let password = Password::new("caf\u{e9} \u{fb01}nance \u{2460}").unwrap();
+        assert_eq!(password.bytes(), b"cafe\xCC\x81 finance 1");
+        // Twelve bytes are counted after the decomposition, not before it.
+        assert_eq!(
+            Password::new("\u{fb01}\u{fb01}\u{fb01}\u{fb01}\u{fb01}").unwrap_err(),
+            StegoError::PasswordShort
+        );
+        assert!(Password::new("\u{fb01}\u{fb01}\u{fb01}\u{fb01}\u{fb01}\u{fb01}").is_ok());
     }
 
     #[test]

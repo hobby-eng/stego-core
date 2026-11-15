@@ -10,4 +10,4 @@ Fast gates (CORE-43):
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 
-Layout: `src/algorithm/` holds the cost models and syndrome codes (no file I/O); `src/jpeg*` the baseline JPEG coefficient codec; `src/sites.rs` the site rules; `src/coding.rs` the three layers; `src/record.rs`, `src/keys.rs` the records and keys; `src/parts.rs`, `src/threshold.rs` sets of several photos; `src/hide.rs`, `src/reveal.rs` the public jobs. `tests/reference/` keeps the Python oracle of the J-CRFW tests.
+Layout: `src/algorithm/` holds the cost models and syndrome codes (no file I/O); `src/jpeg*` the baseline JPEG coefficient codec; `src/sites.rs` the site rules; `src/coding.rs` the three layers; `src/record.rs`, `src/keys.rs` the records and keys; `src/plain.rs` the owner of plaintext on its way, in protected pages; `src/parts.rs`, `src/threshold.rs` sets of several photos; `src/hide.rs`, `src/reveal.rs` the public jobs. `tests/reference/` keeps the Python oracle of the J-CRFW tests.

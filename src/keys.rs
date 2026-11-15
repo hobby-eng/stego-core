@@ -103,6 +103,7 @@ impl Keys {
     ) -> Result<Self, StegoError> {
         let work = password.work();
         let mut root = Secret::zeroed(KEY_BYTES);
+        crate::plain::note(root.is_locked());
         stretch(
             password.bytes(),
             context,
@@ -119,6 +120,7 @@ impl Keys {
         let mut order = Secret::zeroed(KEY_BYTES);
         let mut coder = Zeroizing::new([0; 8]);
         let mut cipher = Secret::zeroed(KEY_BYTES);
+        crate::plain::note(order.is_locked() && cipher.is_locked());
         hkdf.expand_multi_info(&[ORDER_LABEL, &info], order.as_mut_bytes())
             .map_err(|_| StegoError::Crypto)?;
         hkdf.expand_multi_info(&[CODER_LABEL, &info], coder.as_mut())
@@ -188,6 +190,7 @@ pub(crate) fn stretch(
         .checked_mul(Block::SIZE)
         .ok_or(StegoError::Memory)?;
     let mut area = WorkArea::new(area_bytes).ok_or(StegoError::Memory)?;
+    crate::plain::note_stretch(area.is_locked());
     let stretched = Argon2::new(Algorithm::Argon2id, Version::V0x13, parameters)
         .hash_password_into_with_memory(password, salt, out, blocks(&mut area));
     area.as_mut_slice().zeroize();

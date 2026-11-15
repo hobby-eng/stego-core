@@ -12,7 +12,8 @@ Runtime dependencies, pinned exactly in `Cargo.toml`:
 | unicode-normalization  | NFKD of passwords                                                                                                          | MIT OR Apache-2.0 |
 | zeroize                | Wiping secrets                                                                                                             | MIT OR Apache-2.0 |
 | secret-protection-core | Pages for secrets and the isolation of the process; the workspace's own crate, which brings libc, windows-sys and landlock | MIT OR Apache-2.0 |
+| reed-solomon-core      | The Reed–Solomon shards of a k-of-n set, which are ciphertext; the workspace's own crate, without its protected pages      | MIT OR Apache-2.0 |
 
-Development dependencies: jpeg-encoder (synthetic test photos), (MIT OR Apache-2.0) AND IJG; reed-solomon-erasure (an independent Reed–Solomon implementation whose parity the shard tests expect), MIT. The Reed–Solomon codec itself is this crate's own.
+Development dependency: jpeg-encoder (synthetic test photos), (MIT OR Apache-2.0) AND IJG.
 
 Published algorithms implemented from their papers: J-UNIWARD (Holub, Fridrich, Denemark 2014), J-MiPOD (Cogranne, Giboulot, Bas 2021), J-CRFW (Pan et al. 2024), UERD (Guo et al. 2015), syndrome-trellis codes (Filler, Judas, Fridrich 2011), wet-paper codes (Fridrich, Goljan, Soukal 2004).

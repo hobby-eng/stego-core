@@ -4,12 +4,14 @@
 //! over GF(256) (vsss-rs, constant time), so fewer than k photos say nothing about it.
 
 use crate::StegoError;
+use crate::plain::{Plain, same};
 use crate::random::Random;
-use crate::shard::Code;
 use chacha20::ChaCha20Rng;
 use chacha20::rand_core::SeedableRng;
+use chacha20poly1305::aead::inout::InOutBuf;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{Tag, XChaCha20Poly1305, XNonce};
+use reed_solomon_core::{Buffer, Code, CodeError, Field, Redundancy};
 use vsss_rs::Gf256;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -41,28 +43,25 @@ pub(crate) fn split(
     count: usize,
     set: &[u8],
     random: &mut dyn Random,
-) -> Result<Vec<Zeroizing<Vec<u8>>>, StegoError> {
+) -> Result<Vec<Plain>, StegoError> {
     let k = usize::from(needed);
     if k < 2 || k > count || count > THRESHOLD_MAX {
         return Err(StegoError::Threshold);
     }
-    let mut key = Zeroizing::new([0; KEY_BYTES]);
-    random.fill(key.as_mut())?;
+    let mut key = Plain::zeros(KEY_BYTES);
+    random.fill(&mut key)?;
     let mut nonce = [0; NONCE_BYTES];
     random.fill(&mut nonce)?;
-    // The message until it is encrypted in place: wiped if the encryption is refused, and with
-    // room for the tag so that it is never copied to a larger buffer.
-    let mut sealed = Zeroizing::new(Vec::with_capacity(encoded.len() + TAG_BYTES));
-    sealed.extend_from_slice(encoded);
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| StegoError::Crypto)?;
+    // The ciphertext goes from the protected message straight into ordinary memory: it holds no
+    // secret, and the lock limit is left to what does.
+    let mut sealed = vec![0; encoded.len() + TAG_BYTES];
+    let (body, tag_out) = sealed.split_at_mut(encoded.len());
+    let buffers = InOutBuf::new(encoded, body).map_err(|_| StegoError::Crypto)?;
+    let cipher = XChaCha20Poly1305::new_from_slice(&key).map_err(|_| StegoError::Crypto)?;
     let tag = cipher
-        .encrypt_inout_detached(
-            &XNonce::from(nonce),
-            &aad(set),
-            sealed.as_mut_slice().into(),
-        )
+        .encrypt_inout_detached(&XNonce::from(nonce), &aad(set), buffers)
         .map_err(|_| StegoError::Crypto)?;
-    sealed.extend_from_slice(&tag);
+    tag_out.copy_from_slice(&tag);
     let sealed_length = u32::try_from(sealed.len()).map_err(|_| StegoError::MessageLong)?;
     let shards = shards(&sealed, k, count)?;
     let shares = shares(&key, needed, count, random)?;
@@ -70,21 +69,23 @@ pub(crate) fn split(
         .iter()
         .zip(&shards)
         .map(|(share, shard)| {
-            let mut payload = Zeroizing::new(Vec::with_capacity(PAYLOAD_OVERHEAD + shard.len()));
-            payload.push(needed);
             // A share of a 32-byte key is 33 bytes.
-            payload.extend_from_slice(&(share.len() as u16).to_be_bytes());
-            payload.extend_from_slice(share);
-            payload.extend_from_slice(&nonce);
-            payload.extend_from_slice(&sealed_length.to_be_bytes());
-            payload.extend_from_slice(shard);
-            payload
+            let share_length = (share.len() as u16).to_be_bytes();
+            let sealed_length = sealed_length.to_be_bytes();
+            Plain::gathered(&[
+                &[needed],
+                &share_length,
+                share,
+                &nonce,
+                &sealed_length,
+                shard,
+            ])
         })
         .collect())
 }
 
 /// The ciphertext cut into `k` data shards and `count - k` parity shards of equal size.
-fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Vec<u8>>, StegoError> {
+fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Buffer>, StegoError> {
     let size = sealed.len().div_ceil(k);
     let data: Vec<Vec<u8>> = (0..k)
         .map(|i| {
@@ -94,11 +95,29 @@ fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Vec<u8>>, StegoEr
             shard
         })
         .collect();
-    let code = Code::new(k).map_err(|_| StegoError::Threshold)?;
+    let code = Code::new(Field::Gf256, k).map_err(|_| StegoError::Threshold)?;
     let refs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
-    (0..count)
-        .map(|i| code.piece(&refs, i).map_err(|_| StegoError::Threshold))
+    let numbers = (0..count)
+        .map(u16::try_from)
+        .collect::<Result<Vec<u16>, _>>()
+        .map_err(|_| StegoError::Threshold)?;
+    code.encode(&refs, &numbers).map_err(|error| match error {
+        CodeError::Memory => StegoError::Memory,
+        _ => StegoError::Threshold,
+    })
+}
+
+/// The shards of a set's photos as the code takes them: each under its photo's number.
+fn numbered<'a>(parts: &[(usize, &'a [u8], &'a [u8])]) -> Option<Vec<(u16, &'a [u8])>> {
+    parts
+        .iter()
+        .map(|&(i, _, shard)| Some((u16::try_from(i).ok()?, shard)))
         .collect()
+}
+
+/// The numbers of the `k` data shards.
+fn data_numbers(k: usize) -> Vec<u16> {
+    (0..=u16::MAX).take(k).collect()
 }
 
 /// One share of `key` per photo, any `needed` of which restore it; photo `i` gets the share
@@ -106,19 +125,18 @@ fn shards(sealed: &[u8], k: usize, count: usize) -> Result<Vec<Vec<u8>>, StegoEr
 /// host's fresh randomness; the generator wipes its state and its buffer when dropped (chacha20's
 /// `zeroize` feature), so nothing that could make the coefficients again stays behind.
 fn shares(
-    key: &[u8; KEY_BYTES],
+    key: &[u8],
     needed: u8,
     count: usize,
     random: &mut dyn Random,
-) -> Result<Vec<Zeroizing<Vec<u8>>>, StegoError> {
+) -> Result<Vec<Plain>, StegoError> {
     let mut seed = Zeroizing::new([0; KEY_BYTES]);
     random.fill(seed.as_mut())?;
     let mut generator = ChaCha20Rng::from_seed(*seed);
     // vsss-rs shares a secret byte by byte and frees the last byte's polynomial without wiping
     // it. A public zero byte after the key takes that place; its share byte is cut off again, and
     // the shares of the key are what they would have been without it.
-    let mut padded = Zeroizing::new([0_u8; KEY_BYTES + 1]);
-    padded[..KEY_BYTES].copy_from_slice(key);
+    let padded = Plain::gathered(&[key, &[0]]);
     let split = Gf256::split_bytes(
         usize::from(needed),
         count,
@@ -133,7 +151,7 @@ fn shares(
         .zip(1_u8..)
         .map(|(share, number)| {
             (share.len() == SHARE_BYTES + 1 && share[0] == number)
-                .then(|| Zeroizing::new(share[..SHARE_BYTES].to_vec()))
+                .then(|| Plain::gathered(&[&share[..SHARE_BYTES]]))
         })
         .collect::<Option<Vec<_>>>();
     shares.iter_mut().for_each(Zeroize::zeroize);
@@ -250,7 +268,7 @@ fn parse<'a>(payloads: &[(usize, &'a [u8])]) -> Result<Parsed<'a>, Flaw> {
 /// What the parts of a k-of-n set give.
 pub(crate) enum Joined {
     /// The encoded message.
-    Message(Zeroizing<Vec<u8>>),
+    Message(Plain),
     /// A payload is not in the form this version writes.
     Malformed,
     /// The parts are not of one message: their fields differ, or more than k pieces were given
@@ -259,6 +277,8 @@ pub(crate) enum Joined {
     /// The parts agree in form but do not rebuild a ciphertext that opens. With exactly k parts
     /// nothing but the final tag can tell: the pieces have no spare to check each other.
     Unreadable,
+    /// The system gave no memory for the pieces.
+    Memory,
 }
 
 /// Restores the encoded message from `(photo number, payload)` pairs of one set. How many
@@ -275,18 +295,23 @@ pub(crate) fn join(payloads: &[(usize, &[u8])], set: &[u8]) -> Joined {
 
 fn open(parsed: &Parsed<'_>, set: &[u8]) -> Option<Joined> {
     let k = usize::from(parsed.needed);
-    let pieces: Vec<(usize, &[u8])> = parsed
-        .parts
-        .iter()
-        .map(|&(i, _, shard)| (i, shard))
-        .collect();
-    let code = Code::new(k).ok()?;
-    // Every piece beyond k must agree with the others, or the set is mixed.
-    if pieces.len() > k && !code.consistent(&pieces).ok()? {
+    let pieces = numbered(&parsed.parts)?;
+    let code = Code::new(Field::Gf256, k).ok()?;
+    // Every piece beyond k must agree with the others, or the set is mixed. With exactly k there
+    // is nothing to compare them with.
+    if code.redundancy(&pieces).ok()? == Redundancy::Differs {
         return Some(Joined::Inconsistent);
     }
     // `fields` held every shard to the ciphertext's length over k, so the k data pieces hold it.
-    let mut sealed = code.rebuild(&pieces).ok()?.concat();
+    let data = match code.rebuild(&pieces, &data_numbers(k)) {
+        Ok(data) => data,
+        Err(CodeError::Memory) => return Some(Joined::Memory),
+        Err(_) => return None,
+    };
+    let mut sealed = Vec::with_capacity(parsed.sealed_length.next_multiple_of(k));
+    for shard in &data {
+        sealed.extend_from_slice(shard);
+    }
     sealed.truncate(parsed.sealed_length);
     let body_length = sealed.len().checked_sub(TAG_BYTES)?;
     let tag = Tag::try_from(&sealed[body_length..]).ok()?;
@@ -300,7 +325,7 @@ fn open(parsed: &Parsed<'_>, set: &[u8]) -> Option<Joined> {
             .collect(),
     );
     let key = Zeroizing::new(Gf256::combine_bytes(&*shares).ok()?);
-    let mut plain = Zeroizing::new(sealed[..body_length].to_vec());
+    let mut plain = Plain::gathered(&[&sealed[..body_length]]);
     let cipher = XChaCha20Poly1305::new_from_slice(&key).ok()?;
     cipher
         .decrypt_inout_detached(&nonce, &aad(set), plain.as_mut_slice().into(), &tag)
@@ -320,15 +345,14 @@ pub(crate) enum Refused {
     TooFew,
     /// The number is not one a photo of a set can have.
     Number,
+    /// The system gave no memory for the piece.
+    Memory,
 }
 
 /// The payload of photo `index` of a set: its ciphertext piece, made from any k pieces, and its key
 /// share. Nothing is re-encrypted, so the same number always gets the same bytes. The caller must
 /// open the set first; payloads are not checked here.
-pub(crate) fn issue(
-    payloads: &[(usize, &[u8])],
-    index: usize,
-) -> Result<Zeroizing<Vec<u8>>, Refused> {
+pub(crate) fn issue(payloads: &[(usize, &[u8])], index: usize) -> Result<Plain, Refused> {
     let parsed = parse(payloads).map_err(|flaw| match flaw {
         Flaw::Malformed => Refused::Malformed,
         Flaw::Inconsistent => Refused::Inconsistent,
@@ -342,17 +366,12 @@ pub(crate) fn issue(
         .ok()
         .filter(|_| index < THRESHOLD_MAX)
         .ok_or(Refused::Number)?;
-    let pieces: Vec<(usize, &[u8])> = parsed
-        .parts
-        .iter()
-        .map(|&(i, _, shard)| (i, shard))
-        .collect();
-    let code = Code::new(k).map_err(|_| Refused::Malformed)?;
-    if pieces.len() > k
-        && !code
-            .consistent(&pieces)
-            .map_err(|_| Refused::Inconsistent)?
-    {
+    let pieces = numbered(&parsed.parts).ok_or(Refused::Malformed)?;
+    let code = Code::new(Field::Gf256, k).map_err(|_| Refused::Malformed)?;
+    let agree = code
+        .redundancy(&pieces)
+        .map_err(|_| Refused::Inconsistent)?;
+    if agree == Redundancy::Differs {
         return Err(Refused::Inconsistent);
     }
     // The key shares beyond the first k must lie on the polynomials those k fix. Opening the
@@ -366,31 +385,37 @@ pub(crate) fn issue(
         }
     }
     if let Some(&(_, payload)) = payloads.iter().find(|&&(i, _)| i == index) {
-        return Ok(Zeroizing::new(payload.to_vec()));
+        return Ok(Plain::gathered(&[payload]));
     }
-    let data = code.rebuild(&pieces).map_err(|_| Refused::Inconsistent)?;
-    let data: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
-    let shard = code.piece(&data, index).map_err(|_| Refused::Number)?;
+    let target = u16::try_from(index).map_err(|_| Refused::Number)?;
+    let mut made = code
+        .rebuild(&pieces, &[target])
+        .map_err(|error| match error {
+            CodeError::Memory => Refused::Memory,
+            _ => Refused::Inconsistent,
+        })?;
+    let shard = made.pop().ok_or(Refused::Inconsistent)?;
     let share = share_at(&sources, number);
     let length = u32::try_from(parsed.sealed_length).map_err(|_| Refused::Malformed)?;
-    let mut payload = Zeroizing::new(Vec::with_capacity(PAYLOAD_OVERHEAD + shard.len()));
-    payload.push(parsed.needed);
-    payload.extend_from_slice(&(SHARE_BYTES as u16).to_be_bytes());
-    payload.extend_from_slice(&share);
-    payload.extend_from_slice(parsed.nonce);
-    payload.extend_from_slice(&length.to_be_bytes());
-    payload.extend_from_slice(&shard);
-    Ok(payload)
+    let (share_length, length) = ((SHARE_BYTES as u16).to_be_bytes(), length.to_be_bytes());
+    Ok(Plain::gathered(&[
+        &[parsed.needed],
+        &share_length,
+        &share,
+        parsed.nonce,
+        &length,
+        &shard,
+    ]))
 }
 
 /// The share at point `x` of the polynomials that `shares` lie on, each share a point and then
 /// one value per key byte: Lagrange's formula byte by byte, with the field arithmetic of
 /// vsss-rs, which shared the key. The points of `shares` are different; at one of them the
 /// result is that share.
-pub(crate) fn share_at(shares: &[&[u8]], x: u8) -> Zeroizing<Vec<u8>> {
+pub(crate) fn share_at(shares: &[&[u8]], x: u8) -> Plain {
     let point = |share: &[u8]| Gf256(share.first().copied().unwrap_or(0));
     let target = Gf256(x);
-    let mut out = Zeroizing::new(vec![0; SHARE_BYTES]);
+    let mut out = Plain::zeros(SHARE_BYTES);
     if let Some(first) = out.first_mut() {
         *first = x;
     }
@@ -425,11 +450,6 @@ fn inverse(element: Gf256) -> Gf256 {
     power * power
 }
 
-/// Whether two shares are the same, looking at every byte.
-fn same(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0, |differs, (x, y)| differs | (x ^ y)) == 0
-}
-
 fn aad(set: &[u8]) -> Vec<u8> {
     [AAD_LABEL, set].concat()
 }
@@ -441,8 +461,85 @@ mod tests {
 
     const MESSAGE: &[u8] = b"abandon ability able about above absent absorb abstract";
 
-    fn pairs<'a>(parts: &'a [Zeroizing<Vec<u8>>], pick: &[usize]) -> Vec<(usize, &'a [u8])> {
+    fn pairs<'a>(parts: &'a [Plain], pick: &[usize]) -> Vec<(usize, &'a [u8])> {
         pick.iter().map(|&i| (i, parts[i].as_slice())).collect()
+    }
+
+    /// The payloads of a set are bytes of the record format, whichever code makes the
+    /// Reed–Solomon shards. For five shapes, the smallest and largest included, the payloads of
+    /// a set and those it is given later from the photos named are pinned as this crate wrote
+    /// them when it coded the shards itself: their length and SHA-256, in order.
+    #[test]
+    fn the_payloads_of_a_set_are_the_bytes_written_before() {
+        use sha2::{Digest, Sha256};
+        // Threshold, photos, the photos a later one is made from, the later ones, the length of
+        // all payloads and their SHA-256.
+        type Shape = (
+            u8,
+            usize,
+            &'static [usize],
+            &'static [usize],
+            usize,
+            &'static str,
+        );
+        let shapes: [Shape; 5] = [
+            (
+                3,
+                5,
+                &[4, 0, 2],
+                &[5, 6],
+                616,
+                "5015f781164d9bc8e8f34746448e76f7caf18e7fdac3756ce6c57e81ad5d80e9",
+            ),
+            (
+                2,
+                2,
+                &[1, 0],
+                &[15],
+                300,
+                "474aab31e288209cbed5ad1b92ec607f725a06ce4a4e73788c1e0d6ebf048db6",
+            ),
+            (
+                2,
+                16,
+                &[],
+                &[],
+                1600,
+                "3a1924a5132319a0754a733c24f6cfa44027460c5b838e635995d4fff3c23c92",
+            ),
+            (
+                16,
+                16,
+                &[],
+                &[],
+                1104,
+                "98087a18e3c4a3879e588aa7876c98474a00ea50f0482ecb611abbe7005325dd",
+            ),
+            (
+                7,
+                11,
+                &[10, 3, 5, 0, 9, 1, 2],
+                &[14],
+                900,
+                "2300db5def3eb973da0fedb6608a47572f8bed8cd8a8a5b9651e762d9d82e2be",
+            ),
+        ];
+        for (needed, count, from, later, length, expected) in shapes {
+            let parts = split(MESSAGE, needed, count, &[7; 16], &mut Counter(9)).unwrap();
+            let mut all: Vec<u8> = parts.iter().flat_map(|part| part.iter().copied()).collect();
+            for &index in later {
+                all.extend_from_slice(&issue(&pairs(&parts, from), index).unwrap());
+            }
+            let digest: String = Sha256::digest(&all)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            assert_eq!(
+                (all.len(), digest.as_str()),
+                (length, expected),
+                "{needed} of {count}"
+            );
+        }
     }
 
     #[test]

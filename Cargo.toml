@@ -23,14 +23,18 @@ sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
 vsss-rs = { version = "=6.0.1", default-features = false, features = ["std", "zeroize"] }
 unicode-normalization = "=0.1.26"
 zeroize = { version = "=1.9.1", features = ["zeroize_derive"] }
-# Pages for secrets and the isolation of the process: the workspace's shared crate, beside this one.
-secret-protection-core = { version = "=0.1.0", path = "../secret-protection-core" }
+# Pages for secrets and the isolation of the process. Not on crates.io yet: pinned to a commit of
+# its repository.
+secret-protection-core = { version = "=0.1.0", git = "https://github.com/hobby-eng/secret-protection-core", rev = "39e462e946cc300a8a3d3e145517957094eb7c8c" }
+# The Reed–Solomon shards of a k-of-n set. They are ciphertext, so they lie in the allocator's
+# memory, wiped, and leave the lock limit to the secrets. Not on crates.io yet.
+reed-solomon-core = { version = "=0.1.0", git = "https://github.com/hobby-eng/reed-solomon-core", rev = "9c75fba897e4a72e22091b90a9fa14eac4662671", default-features = false, features = [
+  "alloc",
+] }
 
 [dev-dependencies]
 # Synthetic test photos only; no photo file is committed.
 jpeg-encoder = "=0.7.1"
-# An independent Reed–Solomon implementation: the expected parity of the shard tests.
-reed-solomon-erasure = "=6.0.0"
 
 [lints.rust]
 unsafe_code = "deny" # not "forbid": the operating-system modules allow it (RUST-07)

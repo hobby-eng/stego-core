@@ -4,6 +4,7 @@
 
 use crate::StegoError;
 use crate::keys::KEY_BYTES;
+use crate::plain::Plain;
 use crate::random::Random;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{Tag, XChaCha20Poly1305, XNonce};
@@ -59,12 +60,12 @@ pub(crate) fn seal(
     key: &[u8],
     aad: &[u8],
     random: &mut dyn Random,
-) -> Result<Zeroizing<Vec<u8>>, StegoError> {
+) -> Result<Plain, StegoError> {
     let length = plain_in.len();
     if LENGTH_BYTES + length > body {
         return Err(StegoError::MessageLong);
     }
-    let mut record = Zeroizing::new(vec![0_u8; NONCE_BYTES + body + TAG_BYTES]);
+    let mut record = Plain::zeros(NONCE_BYTES + body + TAG_BYTES);
     random.fill(&mut record[..NONCE_BYTES + body])?;
     let plain = &mut record[NONCE_BYTES..NONCE_BYTES + body];
     plain[..LENGTH_BYTES].copy_from_slice(&(length as u32).to_be_bytes());
@@ -81,11 +82,11 @@ pub(crate) fn seal(
 }
 
 /// Decrypts a record; `None` when the key, the size class or the photo does not match.
-pub(crate) fn open(record: &[u8], key: &[u8], aad: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+pub(crate) fn open(record: &[u8], key: &[u8], aad: &[u8]) -> Option<Plain> {
     let body = record.len().checked_sub(NONCE_BYTES + TAG_BYTES)?;
     let nonce = XNonce::try_from(&record[..NONCE_BYTES]).ok()?;
     let tag = Tag::try_from(&record[NONCE_BYTES + body..]).ok()?;
-    let mut plain = Zeroizing::new(record[NONCE_BYTES..NONCE_BYTES + body].to_vec());
+    let mut plain = Plain::gathered(&[&record[NONCE_BYTES..NONCE_BYTES + body]]);
     let cipher = XChaCha20Poly1305::new_from_slice(key).ok()?;
     cipher
         .decrypt_inout_detached(&nonce, aad, plain.as_mut_slice().into(), &tag)
@@ -94,14 +95,12 @@ pub(crate) fn open(record: &[u8], key: &[u8], aad: &[u8]) -> Option<Zeroizing<Ve
         plain.get(..LENGTH_BYTES)?.try_into().ok()?,
     ))
     .ok()?;
-    Some(Zeroizing::new(
-        plain
-            .get(LENGTH_BYTES..LENGTH_BYTES.checked_add(length)?)?
-            .to_vec(),
-    ))
+    let message = plain.get(LENGTH_BYTES..LENGTH_BYTES.checked_add(length)?)?;
+    Some(Plain::gathered(&[message]))
 }
 
-/// Bits of `bytes`, most significant first, one per byte, as the coders take them.
+/// Bits of `bytes`, most significant first, one per byte, as the coders take them. The bytes
+/// are those of a record, which is encrypted.
 pub(crate) fn to_bits(bytes: &[u8]) -> Zeroizing<Vec<u8>> {
     Zeroizing::new(
         bytes

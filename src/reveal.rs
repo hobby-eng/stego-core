@@ -10,11 +10,11 @@ use crate::content::Content;
 use crate::cover::{Cover, MAX_BITS_PER_SITE};
 use crate::keys::Keys;
 use crate::parts::{Assembled, Assembly, CARRIERS_MAX, Part, assemble};
+use crate::plain::{Plain, Watch};
 use crate::record::{associated, bodies, from_bits, open, record_bits};
 use crate::report::{Digest, Layer, ReadReport, RecordReport, parameters};
 use crate::sites::{SiteRule, Sites};
 use crate::{Password, StegoError};
-use zeroize::Zeroizing;
 
 /// What a password opened in the photos. If they hold several sets under that password, the biggest
 /// whole one is answered for; [`ReadReport::other_sets`] counts the rest, so a host can read them
@@ -45,7 +45,8 @@ pub enum Reading {
 #[derive(Debug)]
 pub struct Revealed {
     content: Content,
-    report: ReadReport,
+    // Boxed so that a reading that found nothing is not as large as one that holds the report.
+    report: Box<ReadReport>,
 }
 
 impl Revealed {
@@ -74,6 +75,7 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
     if covers.is_empty() || covers.len() > CARRIERS_MAX {
         return Err(StegoError::Carriers);
     }
+    let watch = Watch::start();
     let mut parts = Vec::new();
     let mut files = Vec::new();
     // Records that opened without a part this version knows: the tag says they are whole, so
@@ -127,6 +129,7 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
         Assembly::Incomplete { found, needed } => Reading::Incomplete { found, needed },
         Assembly::Conflict => Reading::Conflict,
         Assembly::Unsupported => Reading::Unsupported,
+        Assembly::Memory => return Err(StegoError::Memory),
         Assembly::Complete(content) => {
             files.retain(|(index, ..)| sources.contains(index));
             let report = ReadReport {
@@ -135,15 +138,19 @@ pub fn reveal(covers: &[&Cover], password: &Password) -> Result<Reading, StegoEr
                 content_bytes: content.bytes().len(),
                 sha256: Digest::new(content.sha256()),
                 parameters: parameters(),
+                locking: watch.locking(password.is_locked()),
             };
-            Reading::Complete(Revealed { content, report })
+            Reading::Complete(Revealed {
+                content,
+                report: Box::new(report),
+            })
         }
     })
 }
 
 /// A record that opened in one photo.
 pub(crate) struct Found {
-    pub plain: Zeroizing<Vec<u8>>,
+    pub plain: Plain,
     pub layer: Layer,
     pub rule: SiteRule,
     pub body: usize,

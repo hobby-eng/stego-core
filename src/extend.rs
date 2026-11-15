@@ -8,6 +8,7 @@ use crate::hide::{Pair, Written, write_decoy, write_standard};
 use crate::keys::Keys;
 use crate::mode::{Mode, Settings};
 use crate::parts::{NoQuorum, Part, Quorum, quorum};
+use crate::plain::Plain;
 use crate::random::Random;
 use crate::report::{FileReport, Layer, RecordReport};
 use crate::reveal::{Reading, open_one, reveal};
@@ -111,16 +112,17 @@ impl fmt::Display for SetError {
     }
 }
 
-impl From<NoQuorum> for SetError {
+impl From<NoQuorum> for StegoError {
     fn from(reason: NoQuorum) -> Self {
-        match reason {
-            NoQuorum::Nothing => Self::Nothing,
-            NoQuorum::Several => Self::Several,
-            NoQuorum::Split => Self::EveryPhotoNeeded,
-            NoQuorum::Incomplete { found, needed } => Self::Incomplete { found, needed },
-            NoQuorum::Conflict => Self::Conflict,
-            NoQuorum::Unsupported => Self::Unsupported,
-        }
+        Self::Set(match reason {
+            NoQuorum::Memory => return Self::Memory,
+            NoQuorum::Nothing => SetError::Nothing,
+            NoQuorum::Several => SetError::Several,
+            NoQuorum::Split => SetError::EveryPhotoNeeded,
+            NoQuorum::Incomplete { found, needed } => SetError::Incomplete { found, needed },
+            NoQuorum::Conflict => SetError::Conflict,
+            NoQuorum::Unsupported => SetError::Unsupported,
+        })
     }
 }
 
@@ -210,7 +212,7 @@ impl Source {
             let part = Part::parse(&found.plain).ok_or(SetError::Unsupported)?;
             parts.push(part.at(place));
         }
-        let quorum = quorum(parts).map_err(SetError::from)?;
+        let quorum = quorum(parts)?;
         let layer = layer.ok_or(SetError::Nothing)?;
         Ok(Self { layer, quorum })
     }
@@ -232,15 +234,16 @@ impl Source {
     }
 
     /// The part the new photo holds, and its place in this set.
-    fn join(&self, place: Place) -> Result<(zeroize::Zeroizing<Vec<u8>>, Membership), SetError> {
+    fn join(&self, place: Place) -> Result<(Plain, Membership), StegoError> {
         let (index, count) = self.number(place)?;
         let part = self
             .quorum
             .part(index, count)
             .map_err(|refused| match refused {
-                Refused::Number => SetError::Number,
-                Refused::Inconsistent => SetError::Conflict,
-                Refused::Malformed | Refused::TooFew => SetError::Unsupported,
+                Refused::Memory => StegoError::Memory,
+                Refused::Number => SetError::Number.into(),
+                Refused::Inconsistent => SetError::Conflict.into(),
+                Refused::Malformed | Refused::TooFew => SetError::Unsupported.into(),
             })?;
         let known = self.quorum.numbers().any(|(number, _)| number == index);
         let membership = Membership {
@@ -362,7 +365,7 @@ fn write(
     settings: &Settings,
     layer: Layer,
     part: &[u8],
-    behind: &Option<(zeroize::Zeroizing<Vec<u8>>, Membership)>,
+    behind: &Option<(Plain, Membership)>,
     random: &mut dyn Random,
 ) -> Result<Written, StegoError> {
     let photo = addition.photo;

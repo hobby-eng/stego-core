@@ -2,9 +2,9 @@
 //! shards with Shamir key shares, so any `needed` photos suffice. Photos may be read in any order.
 
 use crate::content::Content;
+use crate::plain::Plain;
 use crate::random::Random;
 use crate::{StegoError, threshold};
-use zeroize::Zeroizing;
 
 const SET_BYTES: usize = 16;
 /// Bytes of a part's header: set, scheme, number and count.
@@ -20,7 +20,7 @@ pub(crate) struct Part {
     scheme: u8,
     index: u16,
     count: u16,
-    payload: Zeroizing<Vec<u8>>,
+    payload: Plain,
     /// The photo it was read from, by its place among the photos given.
     source: usize,
 }
@@ -32,7 +32,7 @@ pub(crate) fn spread(
     weights: &[usize],
     needed: Option<u8>,
     random: &mut dyn Random,
-) -> Result<Vec<Zeroizing<Vec<u8>>>, StegoError> {
+) -> Result<Vec<Plain>, StegoError> {
     let count = u16::try_from(weights.len())
         .ok()
         .filter(|&n| n > 0 && usize::from(n) <= CARRIERS_MAX)
@@ -55,22 +55,12 @@ pub(crate) fn spread(
 
 /// A part as a record holds it: the set, the scheme, the part's number and the count, then its
 /// payload.
-fn part(
-    set: &[u8; SET_BYTES],
-    scheme: u8,
-    (index, count): (u16, u16),
-    payload: &[u8],
-) -> Zeroizing<Vec<u8>> {
-    let mut part = Zeroizing::new(Vec::with_capacity(PART_HEADER + payload.len()));
-    part.extend_from_slice(set);
-    part.push(scheme);
-    part.extend_from_slice(&index.to_be_bytes());
-    part.extend_from_slice(&count.to_be_bytes());
-    part.extend_from_slice(payload);
-    part
+fn part(set: &[u8; SET_BYTES], scheme: u8, (index, count): (u16, u16), payload: &[u8]) -> Plain {
+    let (index, count) = (index.to_be_bytes(), count.to_be_bytes());
+    Plain::gathered(&[set, &[scheme], &index, &count, payload])
 }
 
-fn slices(encoded: &[u8], weights: &[usize]) -> Vec<Zeroizing<Vec<u8>>> {
+fn slices(encoded: &[u8], weights: &[usize]) -> Vec<Plain> {
     let total: u128 = weights.iter().map(|&w| w as u128).sum::<u128>().max(1);
     let mut start = 0;
     let mut cumulative: u128 = 0;
@@ -85,7 +75,7 @@ fn slices(encoded: &[u8], weights: &[usize]) -> Vec<Zeroizing<Vec<u8>>> {
                 // At most `encoded.len()`: cumulative <= total.
                 (encoded.len() as u128 * cumulative / total) as usize
             };
-            let slice = Zeroizing::new(encoded[start..end].to_vec());
+            let slice = Plain::gathered(&[&encoded[start..end]]);
             start = end;
             slice
         })
@@ -111,7 +101,7 @@ impl Part {
             scheme,
             index,
             count,
-            payload: Zeroizing::new(plain[PART_HEADER..].to_vec()),
+            payload: Plain::gathered(&[&plain[PART_HEADER..]]),
             source: 0,
         })
     }
@@ -153,6 +143,8 @@ pub(crate) enum Assembly {
     Conflict,
     /// The parts opened under the password but are not in a form this version writes.
     Unsupported,
+    /// The system gave no memory for joining them.
+    Memory,
 }
 
 /// What the parts found in the photos give: the outcome of one set and what else was there.
@@ -215,6 +207,7 @@ enum Flawed {
     Incomplete { found: usize, needed: usize },
     Conflict,
     Unsupported,
+    Memory,
 }
 
 impl From<Flawed> for Assembly {
@@ -223,6 +216,7 @@ impl From<Flawed> for Assembly {
             Flawed::Incomplete { found, needed } => Self::Incomplete { found, needed },
             Flawed::Conflict => Self::Conflict,
             Flawed::Unsupported => Self::Unsupported,
+            Flawed::Memory => Self::Memory,
         }
     }
 }
@@ -299,7 +293,7 @@ fn check(mut set: Vec<Part>) -> Result<Checked, Flawed> {
 }
 
 /// The encoded message of a checked set.
-fn message(set: &Checked) -> Result<Zeroizing<Vec<u8>>, Flawed> {
+fn message(set: &Checked) -> Result<Plain, Flawed> {
     let Some(first) = set.parts.first() else {
         return Err(Flawed::Unsupported);
     };
@@ -310,15 +304,13 @@ fn message(set: &Checked) -> Result<Zeroizing<Vec<u8>>, Flawed> {
         });
     }
     if first.scheme != THRESHOLD {
-        let mut joined = Zeroizing::new(Vec::new());
-        for part in &set.parts {
-            joined.extend_from_slice(&part.payload);
-        }
-        return Ok(joined);
+        let payloads: Vec<&[u8]> = set.parts.iter().map(|part| &*part.payload).collect();
+        return Ok(Plain::gathered(&payloads));
     }
     match threshold::join(&set.payloads(), &first.set) {
         threshold::Joined::Message(encoded) => Ok(encoded),
         threshold::Joined::Malformed => Err(Flawed::Unsupported),
+        threshold::Joined::Memory => Err(Flawed::Memory),
         // Enough authenticated parts that do not open together: report it, never "nothing".
         threshold::Joined::Inconsistent | threshold::Joined::Unreadable => Err(Flawed::Conflict),
     }
@@ -350,6 +342,8 @@ pub(crate) enum NoQuorum {
     Conflict,
     /// The parts are not in a form this version writes.
     Unsupported,
+    /// The system gave no memory for joining them.
+    Memory,
 }
 
 /// The parts of one k-of-n set that opened: what a further photo of the set is made from.
@@ -385,11 +379,7 @@ impl Quorum {
 
     /// The part of photo `index` of this set, declared as one of `count` photos: its header and
     /// the payload the set's own parts give for that number.
-    pub(crate) fn part(
-        &self,
-        index: u16,
-        count: u16,
-    ) -> Result<Zeroizing<Vec<u8>>, threshold::Refused> {
+    pub(crate) fn part(&self, index: u16, count: u16) -> Result<Plain, threshold::Refused> {
         let payloads: Vec<(usize, &[u8])> = self
             .parts
             .iter()
@@ -415,6 +405,7 @@ pub(crate) fn quorum(parts: Vec<Part>) -> Result<Quorum, NoQuorum> {
         Flawed::Incomplete { found, needed } => NoQuorum::Incomplete { found, needed },
         Flawed::Conflict => NoQuorum::Conflict,
         Flawed::Unsupported => NoQuorum::Unsupported,
+        Flawed::Memory => NoQuorum::Memory,
     };
     let checked = check(set).map_err(flaw)?;
     let encoded = message(&checked).map_err(flaw)?;
@@ -441,7 +432,7 @@ mod tests {
     }
 
     /// `parts` as read from the photos at `places`.
-    fn read_at(parts: &[Zeroizing<Vec<u8>>], places: std::ops::Range<usize>) -> Vec<Part> {
+    fn read_at(parts: &[Plain], places: std::ops::Range<usize>) -> Vec<Part> {
         parts
             .iter()
             .zip(places)

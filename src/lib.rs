@@ -20,6 +20,7 @@ mod keys;
 mod mode;
 mod parts;
 mod password;
+mod plain;
 /// Pages for secrets and the isolation of the process, from the workspace's shared crate
 /// `secret-protection-core`: [`protect::Secret`], [`protect::Isolation`], [`protect::Worker`] and the
 /// rest.
@@ -29,7 +30,6 @@ mod record;
 mod report;
 mod reveal;
 mod self_test;
-mod shard;
 mod sites;
 mod threshold;
 
@@ -46,7 +46,8 @@ pub use parts::CARRIERS_MAX;
 pub use password::{PASSWORD_MAX, PASSWORD_MIN, Password};
 pub use random::Random;
 pub use report::{
-    Digest, FileReport, HideReport, Layer, Parameters, ReadReport, RecordReport, hex, parameters,
+    Digest, FileReport, HideReport, Layer, Locking, Parameters, ReadReport, RecordReport, hex,
+    parameters,
 };
 pub use reveal::{Reading, Revealed, reveal};
 pub use self_test::{Check, SelfTest, full_self_test, startup_self_test};

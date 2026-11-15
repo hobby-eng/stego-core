@@ -7,6 +7,7 @@ use crate::cover::{Cover, MAX_BITS_PER_SITE, RECOMMENDED_BPNZAC};
 use crate::keys::Keys;
 use crate::mode::{CostModel, Mode, Settings};
 use crate::parts::{CARRIERS_MAX, spread};
+use crate::plain::Watch;
 use crate::random::Random;
 use crate::record::{associated, bodies, body_for, record_bits, seal, to_bits};
 use crate::report::{Digest, FileReport, HideReport, Layer, RecordReport, parameters};
@@ -81,6 +82,7 @@ pub fn hide(
     random: &mut dyn Random,
 ) -> Result<HideResult, StegoError> {
     check_carriers(covers)?;
+    let watch = Watch::start();
     let weights: Vec<usize> = covers
         .iter()
         .map(|c| {
@@ -136,15 +138,17 @@ pub fn hide(
             .collect::<Result<_, _>>()?,
         (Mode::Standard, Some(_)) => return Err(StegoError::DecoyChoice),
     };
-    finish(written, settings, secret, decoy)
+    // Written: the read-back makes copies of its own.
+    drop(secret_parts);
+    finish(written, settings, (secret, decoy), &watch)
 }
 
 /// Reads the new set back with every password and builds the report.
 fn finish(
     written: Vec<Written>,
     settings: &Settings,
-    secret: Secret<'_>,
-    decoy: Option<Secret<'_>>,
+    (secret, decoy): (Secret<'_>, Option<Secret<'_>>),
+    watch: &Watch,
 ) -> Result<HideResult, StegoError> {
     let covers: Vec<Cover> = written
         .iter()
@@ -194,6 +198,11 @@ fn finish(
         secret_sha256: Digest::new(secret.content.sha256()),
         decoy: decoy.map(|d| (d.content.bytes().len(), Digest::new(d.content.sha256()))),
         parameters: parameters(),
+        locking: watch.locking(
+            std::iter::once(secret)
+                .chain(decoy)
+                .all(|owner| owner.content.is_locked() && owner.password.is_locked()),
+        ),
     };
     Ok(HideResult {
         files: written.into_iter().map(|w| w.bytes).collect(),

@@ -45,7 +45,7 @@ Each password is stretched with Argon2id. The person may raise two numbers: the 
 
 ## Protection while it runs
 
-Passwords, messages and keys live in pages of their own, locked against swap or in Linux's secret memory, between guard pages, kept out of core dumps and wiped when dropped. The protection comes from the workspace's shared crate `secret-protection-core`, re-exported as `stego_core::protect`: a host program runs the secret work in an isolated worker process, or isolates its own process, and refuses to read a secret when a protection it requires is missing. See [How it works](docs/TECHNICAL.md#protection).
+Passwords, messages, their parts on the way to the photos and keys live in pages of their own, locked against swap or in Linux's secret memory, between guard pages, kept out of core dumps and wiped when dropped. Locking stops at the system's limit, 8 MiB by default on Linux; beyond it the pages are used unlocked, and the report of each job says whether everything stayed locked. The protection comes from the workspace's shared crate `secret-protection-core`, re-exported as `stego_core::protect`: a host program runs the secret work in an isolated worker process, or isolates its own process, and refuses to read a secret when a protection it requires is missing. See [How it works](docs/TECHNICAL.md#protection).
 
 ## Limits
 

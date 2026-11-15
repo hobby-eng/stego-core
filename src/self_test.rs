@@ -10,12 +10,12 @@ use crate::algorithm::stc::{
     HEIGHT, SEGMENT_BITS, binary_embed, binary_extract, column_prefix, columns, prefix_extract,
 };
 use crate::random::Random;
-use crate::shard::Code;
 use crate::{Content, Cover, Password, Reading, Secret, Settings, StegoError, hide, reveal};
 use argon2::{Algorithm, Argon2, AssociatedData, ParamsBuilder, Version};
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
+use reed_solomon_core::{Code, Field};
 use sha2::{Digest, Sha256};
 
 /// One check: its name and whether it passed.
@@ -60,6 +60,10 @@ pub fn startup_self_test() -> SelfTest {
             stretch,
         ),
         ("Reed–Solomon: 01 02 03 04 gives parity 45 5E", reed_solomon),
+        (
+            "Reed–Solomon: the coding crate's own known answers",
+            reed_solomon_crate,
+        ),
         (
             "Shamir: shares built by hand over GF(2^8), polynomial 0x11B, open in vsss-rs",
             shamir,
@@ -223,15 +227,27 @@ fn stretch() -> bool {
 }
 
 fn reed_solomon() -> bool {
-    let Ok(code) = Code::new(4) else {
+    let Ok(code) = Code::new(Field::Gf256, 4) else {
         return false;
     };
     let data: [&[u8]; 4] = [&[1], &[2], &[3], &[4]];
-    let (Ok(p4), Ok(p5)) = (code.piece(&data, 4), code.piece(&data, 5)) else {
+    let Ok(parity) = code.encode(&data, &[4, 5]) else {
         return false;
     };
-    let rebuilt = code.rebuild(&[(5, &p5), (1, &[2]), (4, &p4), (3, &[4])]);
-    p4 == [0x45] && p5 == [0x5E] && rebuilt.is_ok_and(|d| d == [[1], [2], [3], [4]])
+    let [p4, p5] = parity.as_slice() else {
+        return false;
+    };
+    let left: [(u16, &[u8]); 4] = [(5, p5), (1, &[2]), (4, p4), (3, &[4])];
+    let rebuilt = code.rebuild(&left, &[0, 1, 2, 3]);
+    **p4 == [0x45]
+        && **p5 == [0x5E]
+        && rebuilt.is_ok_and(|shards| shards.iter().map(|shard| &**shard).eq(data))
+}
+
+/// The known answers the coding crate checks itself against, run here as well: this build's
+/// copy of it is the one that codes the shards.
+fn reed_solomon_crate() -> bool {
+    reed_solomon_core::self_test().passed()
 }
 
 /// Shares of the secret 53 CA 00 FF for 3 of 5, computed outside this crate by Shamir's formula

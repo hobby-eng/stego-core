@@ -122,6 +122,20 @@ pub struct HideReport {
     pub decoy: Option<(usize, Digest)>,
     /// The fixed parameters.
     pub parameters: Parameters,
+    /// Whether the job's memory stayed locked.
+    pub locking: Locking,
+}
+
+/// Whether a job's memory stayed out of swap. Pages are locked only within the system's lock
+/// limit (`RLIMIT_MEMLOCK`, 8 MiB by default on Linux, which secret memory counts toward); beyond
+/// it they are used unlocked. The counts are the process's while the job ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Locking {
+    /// Every buffer that held a password, the message, a part of it or a key lay in locked pages,
+    /// the caller's own included.
+    pub secrets: bool,
+    /// The password stretch's work area did; at the default 128 MiB it is above the default limit.
+    pub stretch: bool,
 }
 
 /// The result of a reading job.
@@ -139,6 +153,8 @@ pub struct ReadReport {
     pub sha256: Digest,
     /// The fixed parameters.
     pub parameters: Parameters,
+    /// Whether the job's memory stayed locked.
+    pub locking: Locking,
 }
 
 /// A message's SHA-256, for the person to compare. Unsalted, so a short message can be guessed
