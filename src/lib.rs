@@ -27,10 +27,12 @@ mod inspect;
 mod jpeg;
 mod keys;
 mod mode;
-mod os;
 mod parts;
 mod password;
-pub mod protect;
+/// Pages for secrets and the isolation of the process, from the workspace's shared crate
+/// `secret-protection-core`: [`protect::Secret`], [`protect::Isolation`], [`protect::Worker`] and the
+/// rest.
+pub use secret_protection_core as protect;
 mod random;
 mod record;
 mod report;

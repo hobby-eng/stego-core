@@ -1,8 +1,7 @@
 //! One Argon2id stretch per password and photo; separate keys for each layer's order, coder and
 //! cipher.
 
-use crate::os::Pages;
-use crate::protect::Secret;
+use crate::protect::{Secret, WorkArea};
 use crate::report::Layer;
 use crate::{Password, StegoError};
 use argon2::{Algorithm, Argon2, Block, Params, Version};
@@ -192,7 +191,7 @@ pub(crate) fn stretch(
         .block_count()
         .checked_mul(Block::SIZE)
         .ok_or(StegoError::Memory)?;
-    let mut area = Pages::work_area(area_bytes).ok_or(StegoError::Memory)?;
+    let mut area = WorkArea::new(area_bytes).ok_or(StegoError::Memory)?;
     let stretched = Argon2::new(Algorithm::Argon2id, Version::V0x13, parameters)
         .hash_password_into_with_memory(password, salt, out, blocks(&mut area));
     area.as_mut_slice().zeroize();
@@ -205,7 +204,7 @@ pub(crate) fn stretch(
     unsafe_code,
     reason = "RustCrypto takes its memory as Blocks, and bytes become Blocks through a raw pointer"
 )]
-fn blocks(work_area: &mut Pages) -> &mut [Block] {
+fn blocks(work_area: &mut WorkArea) -> &mut [Block] {
     let area = work_area.as_mut_slice();
     let count = area.len() / Block::SIZE;
     // SAFETY: pages start on a page boundary, which meets a Block's alignment of 64; `count`

@@ -67,6 +67,18 @@ pub enum StegoError {
         /// Its capacity in bytes.
         capacity: usize,
     },
+    /// The system did not lock the memory a secret was to go in, which the host required.
+    NotLocked,
+}
+
+impl From<crate::protect::SecretError> for StegoError {
+    fn from(error: crate::protect::SecretError) -> Self {
+        match error {
+            crate::protect::SecretError::Full { capacity } => Self::SecretFull { capacity },
+            crate::protect::SecretError::NotLocked => Self::NotLocked,
+            crate::protect::SecretError::NoMemory => Self::Memory,
+        }
+    }
 }
 
 impl fmt::Display for StegoError {
@@ -118,6 +130,7 @@ impl fmt::Display for StegoError {
             Self::SecretFull { capacity } => {
                 return write!(f, "a secret buffer of {capacity} bytes is full");
             }
+            Self::NotLocked => "the system did not lock the memory for a secret",
         };
         f.write_str(text)
     }

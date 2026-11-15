@@ -23,27 +23,8 @@ sha2 = { version = "=0.11.1", default-features = false, features = ["zeroize"] }
 vsss-rs = { version = "=6.0.1", default-features = false, features = ["std", "zeroize"] }
 unicode-normalization = "=0.1.26"
 zeroize = { version = "=1.9.1", features = ["zeroize_derive"] }
-
-# Pages, locking, dump and fork advice, process protections and the secret writer (`os`, copied
-# from mhfe_core).
-[target.'cfg(unix)'.dependencies]
-libc = "=0.2.191"
-
-# Pages, locking and the working set, error-report exclusion, the access lists of the process and
-# its threads, token integrity and console output.
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = [
-  "Win32_Foundation",
-  "Win32_System_Memory",
-  "Win32_System_ErrorReporting",
-  "Win32_System_Console",
-  "Win32_System_IO",
-  "Win32_Storage_FileSystem",
-  "Win32_Security",
-  "Win32_Security_Authorization",
-  "Win32_System_Threading",
-  "Win32_System_Diagnostics_ToolHelp",
-] }
+# Pages for secrets and the isolation of the process: the workspace's shared crate, beside this one.
+secret-protection-core = { version = "=0.1.0", path = "../secret-protection-core" }
 
 [dev-dependencies]
 # Synthetic test photos only; no photo file is committed.
@@ -79,7 +60,3 @@ opt-level = 2
 panic = "abort"
 lto = true
 codegen-units = 1
-
-# The tests read the working set of the secret pages (QueryWorkingSetEx).
-[target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_System_ProcessStatus"] }

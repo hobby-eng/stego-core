@@ -45,7 +45,7 @@ Each password is stretched with Argon2id. The person may raise two numbers: the 
 
 ## Protection while it runs
 
-Passwords, messages and keys live in pages of their own, locked against swap or in Linux's secret memory, kept out of core dumps and wiped when dropped. A host program can isolate its process: no core dumps, no memory reading by other programs, no new network connections and no file writes. See [How it works](docs/TECHNICAL.md#protection).
+Passwords, messages and keys live in pages of their own, locked against swap or in Linux's secret memory, between guard pages, kept out of core dumps and wiped when dropped. The protection comes from the workspace's shared crate `secret-protection-core`, re-exported as `stego_core::protect`: a host program runs the secret work in an isolated worker process, or isolates its own process, and refuses to read a secret when a protection it requires is missing. See [How it works](docs/TECHNICAL.md#protection).
 
 ## Limits
 
