@@ -458,7 +458,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 [[package]]
 name = "reed-solomon-core"
 version = "0.1.0"
-source = "git+https://github.com/hobby-eng/reed-solomon-core?rev=9c75fba897e4a72e22091b90a9fa14eac4662671#9c75fba897e4a72e22091b90a9fa14eac4662671"
+source = "git+https://github.com/hobby-eng/reed-solomon-core?rev=f6e2888aca317699b94eaa4b0facc27a5f3a169a#f6e2888aca317699b94eaa4b0facc27a5f3a169a"
 dependencies = [
  "sha2",
  "zeroize",
@@ -487,7 +487,7 @@ dependencies = [
 [[package]]
 name = "secret-protection-core"
 version = "0.1.0"
-source = "git+https://github.com/hobby-eng/secret-protection-core?rev=2747028f4452c3e36f2a500eabdbc795010bf295#2747028f4452c3e36f2a500eabdbc795010bf295"
+source = "git+https://github.com/hobby-eng/secret-protection-core?rev=fb2a6d345caf8eb58097f013f12e43985402150f#fb2a6d345caf8eb58097f013f12e43985402150f"
 dependencies = [
  "landlock",
  "libc",
